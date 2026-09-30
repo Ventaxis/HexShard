@@ -23,6 +23,12 @@ sealed class VirtualNumberConfirmationResult {
     data class Error(val message: String) : VirtualNumberConfirmationResult()
 }
 
+sealed class ActiveVirtualNumberState {
+    data class Active(val raw8Digits: String, val formatted: String) : ActiveVirtualNumberState()
+    object NoActiveNumber : ActiveVirtualNumberState()
+    data class TemporaryError(val message: String) : ActiveVirtualNumberState()
+}
+
 object VirtualNumberService {
 
     private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
@@ -92,12 +98,11 @@ object VirtualNumberService {
 
         // 2. Fallback to atomic RPC reserve_hex_number
         try {
-            // PostgREST maps JSON fields to named parameters. Explicitly supply p_preferred (null if unselected)
+            // PostgREST maps JSON fields to named parameters.
+            // If preferred is empty, send empty JSON {} so PostgreSQL DEFAULT NULL is triggered.
             val rpcPayload = JSONObject().apply {
                 if (!preferred.isNullOrBlank()) {
-                    put("p_preferred", preferred)
-                } else {
-                    put("p_preferred", JSONObject.NULL)
+                    put("p_preferred", preferred.trim())
                 }
             }
             val rpcReq = Request.Builder()
@@ -108,8 +113,22 @@ object VirtualNumberService {
                 .post(rpcPayload.toString().toRequestBody(JSON_MEDIA))
                 .build()
 
-            val resp = httpClient.newCall(rpcReq).execute()
-            val body = resp.body?.string() ?: ""
+            var resp = httpClient.newCall(rpcReq).execute()
+            var body = resp.body?.string() ?: ""
+
+            // Fallback attempt: if parameterized call failed with 404 / schema cache error, try parameterless call {}
+            if ((resp.code == 404 || body.contains("schema cache") || body.contains("Could not find the function")) && rpcPayload.length() > 0) {
+                Timber.w("Parameterized RPC failed with schema mismatch ($body), attempting parameterless reserve_hex_number()")
+                val fallbackReq = Request.Builder()
+                    .url("$baseUrl/rest/v1/rpc/reserve_hex_number")
+                    .header("apikey", anonKey)
+                    .header("Authorization", "Bearer $accessToken")
+                    .header("Content-Type", "application/json")
+                    .post("{}".toRequestBody(JSON_MEDIA))
+                    .build()
+                resp = httpClient.newCall(fallbackReq).execute()
+                body = resp.body?.string() ?: ""
+            }
 
             if (resp.isSuccessful && body.isNotEmpty()) {
                 val json = JSONObject(body)
@@ -237,6 +256,90 @@ object VirtualNumberService {
         }
 
         VirtualNumberConfirmationResult.Error("Failed to confirm number on server")
+    }
+
+    /**
+     * Unified, canonical method to query server-authoritative active HexShard ID.
+     * Accurately distinguishes [ActiveVirtualNumberState.Active],
+     * [ActiveVirtualNumberState.NoActiveNumber], and
+     * [ActiveVirtualNumberState.TemporaryError].
+     */
+    suspend fun loadActiveVirtualNumber(
+        accountId: String,
+        accessToken: String,
+        context: Context
+    ): ActiveVirtualNumberState = withContext(Dispatchers.IO) {
+        if (accountId.isBlank() || accessToken.isBlank()) {
+            return@withContext ActiveVirtualNumberState.TemporaryError("Missing account credentials")
+        }
+        val baseUrl = SupabaseConfig.getBaseUrl()
+        val anonKey = SupabaseConfig.getAnonKey(context)
+
+        // Try querying by account_id first (production schema), then owner_id (v11 schema)
+        val candidateUrls = listOf(
+            "$baseUrl/rest/v1/hex_numbers?account_id=eq.$accountId&status=eq.active&select=*&limit=1",
+            "$baseUrl/rest/v1/hex_numbers?owner_id=eq.$accountId&status=eq.active&select=*&limit=1"
+        )
+
+        var lastError: String? = null
+        for (url in candidateUrls) {
+            try {
+                val req = Request.Builder()
+                    .url(url)
+                    .header("apikey", anonKey)
+                    .header("Authorization", "Bearer $accessToken")
+                    .get()
+                    .build()
+
+                val resp = httpClient.newCall(req).execute()
+                val body = resp.body?.string() ?: ""
+
+                if (resp.isSuccessful) {
+                    val arr = org.json.JSONArray(body)
+                    if (arr.length() > 0) {
+                        val obj = arr.getJSONObject(0)
+                        val raw = obj.optString("number", obj.optString("raw_number", ""))
+                        val clean = raw.filter { it.isDigit() }
+                        if (clean.length == 8) {
+                            val formatted = VirtualNumberGenerator.format8Digits(clean)
+                            SessionManager.updateVirtualNumber(context, clean)
+                            SecurePrefsManager.setPrivateVirtualNumber(context, clean, accountId)
+                            return@withContext ActiveVirtualNumberState.Active(clean, formatted)
+                        }
+                    }
+                    // Server authoritatively confirmed 0 active numbers exist for this account
+                    return@withContext ActiveVirtualNumberState.NoActiveNumber
+                } else if (resp.code == 400 && body.contains("does not exist")) {
+                    // Column name mismatch between schemas, try fallback url
+                    lastError = "Column mismatch: $body"
+                    continue
+                } else {
+                    lastError = "Server HTTP ${resp.code}: $body"
+                }
+            } catch (e: Exception) {
+                Timber.w(e, "Error loading active virtual number from $url")
+                lastError = e.message ?: "Network error"
+            }
+        }
+
+        ActiveVirtualNumberState.TemporaryError(lastError ?: "Failed to query active virtual number")
+    }
+
+    /**
+     * Queries Supabase for the active virtual number assigned to [accountId] and synchronizes session state.
+     * If server returns active row, updates local cache and session with canonical 8 digits.
+     * If server returns no record or an error, returns null.
+     */
+    suspend fun fetchActiveVirtualNumber(
+        accountId: String,
+        accessToken: String,
+        context: Context
+    ): String? = withContext(Dispatchers.IO) {
+        when (val res = loadActiveVirtualNumber(accountId, accessToken, context)) {
+            is ActiveVirtualNumberState.Active -> res.formatted
+            is ActiveVirtualNumberState.NoActiveNumber -> null
+            is ActiveVirtualNumberState.TemporaryError -> null
+        }
     }
 
     private fun parseErrorMessage(responseBody: String, fallback: String): String {

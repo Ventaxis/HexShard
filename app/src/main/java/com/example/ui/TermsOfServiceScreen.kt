@@ -2,16 +2,16 @@ package com.example.ui
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.ui.theme.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -21,14 +21,33 @@ fun TermsOfServiceScreen(onBack: () -> Unit) {
     val sections = LegalContent.getTermsOfService(currentLang)
 
     Scaffold(
+        containerColor = HexDarkBg,
         topBar = {
             TopAppBar(
-                title = { Text(strings.termsService) },
+                title = { 
+                    Text(
+                        strings.termsService,
+                        fontWeight = FontWeight.Bold,
+                        color = HexTextPrimary
+                    ) 
+                },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier.hexPressEffect()
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = HexTextPrimary
+                        )
                     }
-                }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = HexDarkBg,
+                    titleContentColor = HexTextPrimary,
+                    navigationIconContentColor = HexTextPrimary
+                )
             )
         }
     ) { padding ->
@@ -43,39 +62,37 @@ fun TermsOfServiceScreen(onBack: () -> Unit) {
                 text = strings.termsService,
                 fontSize = 22.sp,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface
+                color = HexTextPrimary
             )
             Text(
                 text = if (currentLang == AppLanguage.RUSSIAN) "Версия редакции: Сентябрь 2026" else "Version: September 2026",
                 fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = HexTextSecondary,
                 modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
             )
 
             sections.forEach { section ->
-                Card(
+                HexCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(bottom = 12.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-                    )
+                    containerColor = HexDarkSurface,
+                    borderColor = HexDarkBorder
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
                             text = section.title,
                             fontWeight = FontWeight.Bold,
                             fontSize = 15.sp,
-                            color = MaterialTheme.colorScheme.primary
+                            color = HexShardTeal
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         section.paragraphs.forEach { paragraph ->
                             Text(
                                 text = paragraph,
-                                fontSize = 13.5.sp,
+                                fontSize = 13.sp,
                                 lineHeight = 19.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = HexTextSecondary,
                                 modifier = Modifier.padding(bottom = 6.dp)
                             )
                         }

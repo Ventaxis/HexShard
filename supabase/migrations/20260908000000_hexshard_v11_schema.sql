@@ -558,19 +558,6 @@ BEGIN
 END;
 $$;
 
--- Overload: Atomic +999 Virtual Number Reservation without parameters (PostgREST schema cache compatibility)
-CREATE OR REPLACE FUNCTION public.reserve_hex_number()
-RETURNS JSONB
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public, pg_temp
-AS $$
-BEGIN
-    RETURN public.reserve_hex_number(NULL::TEXT);
-END;
-$$;
-
-GRANT EXECUTE ON FUNCTION public.reserve_hex_number() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.reserve_hex_number(TEXT) TO authenticated;
 
 -- Function: Atomic +999 Virtual Number Confirmation & Activation

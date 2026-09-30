@@ -60,7 +60,14 @@ async function getAuthenticatedUser(req: Request) {
 const memoryRateLimit = new Map<string, number>();
 
 // Server-authoritative allowed AI models
-const ALLOWED_AI_MODELS = new Set(["gemini-3.6-flash", "gemini-3.5-flash-lite"]);
+const ALLOWED_AI_MODELS = new Set([
+  "gemini-3.5-flash",
+  "gemini-2.5-flash",
+  "gemini-flash-latest",
+  "gemini-3.1-flash-lite-preview",
+  "gemini-3.6-flash",
+  "gemini-3.5-flash-lite"
+]);
 
 const VENTAXIS_SYSTEM_PROMPT = `You are Ventaxis AI, a built-in AI persona inside HexShard Messenger.
 
@@ -203,14 +210,14 @@ serve(async (req: Request) => {
 
     if (rawPersona === "ventaxis") {
       canonicalPersona = "ventaxis";
-      modelId = "gemini-3.6-flash";
+      modelId = "gemini-3.5-flash";
       systemPrompt = VENTAXIS_SYSTEM_PROMPT;
       temperature = 0.7;
     } else if (rawPersona === "hexagon") {
       canonicalPersona = "hexagon";
-      modelId = "gemini-3.5-flash-lite";
+      modelId = "gemini-2.5-flash";
       systemPrompt = HEXAGON_SYSTEM_PROMPT;
-      temperature = 0.4;
+      temperature = 0.3;
     } else {
       return new Response(
         JSON.stringify({
@@ -303,7 +310,8 @@ serve(async (req: Request) => {
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(reqBody)
+      body: JSON.stringify(reqBody),
+      signal: AbortSignal.timeout(8000)
     });
 
     if (!res.ok) {

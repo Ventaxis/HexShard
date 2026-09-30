@@ -326,6 +326,20 @@ object SupabaseAuthService {
             var vNumber = ""
             var isTgVerified = false
 
+            // Fetch and sync user profile (bio, date_of_birth, avatar_url, hex_number)
+            try {
+                val profileRepo = com.example.data.repository.ProfileRepository(context)
+                val profileData = profileRepo.fetchProfileFromServer(accountId, accessToken)
+                if (profileData != null && profileData.hexNumber.isNotBlank()) {
+                    val cleanDigits = profileData.hexNumber.filter { it.isDigit() }
+                    if (cleanDigits.length == 8) {
+                        vNumber = cleanDigits
+                    }
+                }
+            } catch (e: Exception) {
+                Timber.d("Profile sync exception on sign-in: ${e.message}")
+            }
+
             try {
                 val numReq = Request.Builder()
                     .url("$baseUrl/rest/v1/hex_numbers?owner_id=eq.$accountId&status=eq.active&select=*&limit=1")
@@ -339,11 +353,23 @@ object SupabaseAuthService {
                     val arr = JSONArray(nBody)
                     if (arr.length() > 0) {
                         val obj = arr.getJSONObject(0)
-                        vNumber = obj.optString("number", obj.optString("raw_number", ""))
+                        val rawFromDb = obj.optString("number", obj.optString("raw_number", ""))
+                        val cleanDigits = rawFromDb.filter { it.isDigit() }
+                        if (cleanDigits.length == 8) {
+                            vNumber = cleanDigits
+                        }
                     }
                 }
             } catch (e: Exception) {
-                Timber.d("Error fetching hex_number: ${e.message}")
+                Timber.d("Error fetching hex_number from server: ${e.message}")
+            }
+
+            // If server was unreachable or error occurred, preserve valid cached number for this account
+            if (vNumber.isBlank()) {
+                val cached = SecurePrefsManager.getRawPrivateVirtualNumber(context, accountId)
+                if (cached.length == 8) {
+                    vNumber = cached
+                }
             }
 
             try {
@@ -409,10 +435,12 @@ object SupabaseAuthService {
                 isTelegramVerified = isTgVerified
             )
 
+            val formattedVNum = if (vNumber.isNotBlank()) com.example.util.VirtualNumberGenerator.format8Digits(vNumber) else ""
+
             SignInResult.Success(
                 accountId = accountId,
                 username = cleanUsername,
-                virtualNumber = vNumber,
+                virtualNumber = formattedVNum,
                 telegramVerified = isTgVerified,
                 accessToken = accessToken
             )

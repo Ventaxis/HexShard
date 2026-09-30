@@ -36,6 +36,9 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import com.example.ui.theme.HexShardTeal
+import com.example.ui.theme.HexShardTealLight
+import com.example.ui.theme.HexShardTealContainer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
@@ -61,39 +64,62 @@ import com.example.data.database.isAiAssistant
 import com.example.data.database.isSavedMessages
 import kotlinx.coroutines.launch
 
-// Custom Theme colors matching user specs
-val SpotifyGreen = Color(0xFF1DB954)
-val SpotifyGreenHover = Color(0xFF1ED760)
+// Custom Theme colors matching HexShard specs (#03A062 teal + Dark Cinematic)
+val SpotifyGreen = Color(0xFF03A062)
+val SpotifyGreenHover = Color(0xFF05BA72)
 
 // Dark Theme Colors
-val DarkBg = Color(0xFF121212)
-val DarkBgSurface = Color(0xFF181818)
-val DarkBgActive = Color(0xFF282828)
-val DarkBorder = Color(0xFF323232)
-val DarkTxtMain = Color(0xFFFFFFFF)
-val DarkTxtSec = Color(0xFFB3B3B3)
-val DarkBubbleMe = Color(0xFF1DB954)
-val DarkBubbleOther = Color(0xFF242424)
+val DarkBg = Color(0xFF0D0F12)
+val DarkBgSurface = Color(0xFF14171D)
+val DarkBgActive = Color(0xFF1E242E)
+val DarkBorder = Color(0xFF242B35)
+val DarkTxtMain = Color(0xFFF1F5F9)
+val DarkTxtSec = Color(0xFF94A3B8)
+val DarkBubbleMe = Color(0xFF03A062)
+val DarkBubbleOther = Color(0xFF181D25)
 
 // Light Theme Colors
 val LightBg = Color(0xFFFFFFFF)
-val LightBgSurface = Color(0xFFF5F5F5)
-val LightBgActive = Color(0xFFEBEBEB)
-val LightBorder = Color(0xFFE4E4E4)
-val LightTxtMain = Color(0xFF191414)
-val LightTxtSec = Color(0xFF737373)
-val LightBubbleMe = Color(0xFF1DB954)
-val LightBubbleOther = Color(0xFFECECEC)
+val LightBgSurface = Color(0xFFF8FAFC)
+val LightBgActive = Color(0xFFF1F5F9)
+val LightBorder = Color(0xFFE2E8F0)
+val LightTxtMain = Color(0xFF0F172A)
+val LightTxtSec = Color(0xFF64748B)
+val LightBubbleMe = Color(0xFF03A062)
+val LightBubbleOther = Color(0xFFF1F5F9)
 
-val DangerColor = Color(0xFFE53935)
+val DangerColor = Color(0xFFEF4444)
 
 @Composable
 fun HexShardApp(viewModel: ChatViewModel, onNavigateToSettings: () -> Unit = {}) {
     val isDark by viewModel.isDarkTheme.collectAsStateWithLifecycle()
     val context = androidx.compose.ui.platform.LocalContext.current
 
+    var showMissingHexShardDialog by remember { mutableStateOf(false) }
+    var showClaimHexShardDialog by remember { mutableStateOf(false) }
+    val currentUserId = remember { com.example.data.SecurePrefsManager.getUserId(context) }
+    var currentVirtualNumber by remember {
+        mutableStateOf(com.example.data.SecurePrefsManager.getPrivateVirtualNumber(context, currentUserId))
+    }
+
     androidx.compose.runtime.LaunchedEffect(Unit) {
         viewModel.onAccountChanged()
+        val uid = com.example.data.SecurePrefsManager.getUserId(context)
+        val token = com.example.data.SecurePrefsManager.getSupabaseAccessToken(context)
+        var localNumber = com.example.data.SecurePrefsManager.getPrivateVirtualNumber(context, uid)
+        if (localNumber.isBlank() && uid.isNotBlank() && token.isNotBlank()) {
+            val state = com.example.network.supabase.VirtualNumberService.loadActiveVirtualNumber(uid, token, context)
+            if (state is com.example.network.supabase.ActiveVirtualNumberState.Active) {
+                localNumber = state.formatted
+                currentVirtualNumber = localNumber
+            }
+        }
+        if (localNumber.isBlank()) {
+            val dismissed = com.example.data.SecurePrefsManager.isHexShardPromptDismissed(context, uid)
+            if (!dismissed) {
+                showMissingHexShardDialog = true
+            }
+        }
     }
     
     // Choose active palette
@@ -126,6 +152,8 @@ fun HexShardApp(viewModel: ChatViewModel, onNavigateToSettings: () -> Unit = {})
                         searchQuery = searchQuery,
                         typingChatId = typingChatId,
                         isDark = isDark,
+                        virtualNumber = currentVirtualNumber,
+                        onClaimHexShardId = { showClaimHexShardDialog = true },
                         onChatSelected = { viewModel.selectChat(it) },
                         onQueryChanged = { viewModel.updateSearchQuery(it) },
                         onAddChatClicked = { name, initials -> viewModel.createNewChat(name, initials) },
@@ -197,6 +225,8 @@ fun HexShardApp(viewModel: ChatViewModel, onNavigateToSettings: () -> Unit = {})
                             searchQuery = searchQuery,
                             typingChatId = typingChatId,
                             isDark = isDark,
+                            virtualNumber = currentVirtualNumber,
+                            onClaimHexShardId = { showClaimHexShardDialog = true },
                             onChatSelected = { viewModel.selectChat(it) },
                             onQueryChanged = { viewModel.updateSearchQuery(it) },
                             onAddChatClicked = { name, initials -> viewModel.createNewChat(name, initials) },
@@ -235,6 +265,29 @@ fun HexShardApp(viewModel: ChatViewModel, onNavigateToSettings: () -> Unit = {})
                 }
             }
         }
+
+        if (showMissingHexShardDialog) {
+            HexShardIdMissingDialog(
+                onContinue = {
+                    showMissingHexShardDialog = false
+                    showClaimHexShardDialog = true
+                },
+                onDismiss = {
+                    showMissingHexShardDialog = false
+                    com.example.data.SecurePrefsManager.setHexShardPromptDismissed(context, currentUserId, true)
+                }
+            )
+        }
+
+        if (showClaimHexShardDialog) {
+            HexShardIdClaimDialog(
+                onDismiss = { showClaimHexShardDialog = false },
+                onSuccess = { formatted ->
+                    currentVirtualNumber = formatted
+                    showClaimHexShardDialog = false
+                }
+            )
+        }
     }
 }
 
@@ -246,6 +299,8 @@ fun SidebarPanel(
     searchQuery: String,
     typingChatId: Int?,
     isDark: Boolean,
+    virtualNumber: String = "",
+    onClaimHexShardId: () -> Unit = {},
     onChatSelected: (Int) -> Unit,
     onQueryChanged: (String) -> Unit,
     onAddChatClicked: (String, String) -> Unit,
@@ -299,7 +354,40 @@ fun SidebarPanel(
                 )
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // +999 Virtual number claim button if not yet claimed
+                if (virtualNumber.isBlank()) {
+                    IconButton(
+                        onClick = onClaimHexShardId,
+                        modifier = Modifier
+                            .height(36.dp)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(HexShardTealContainer)
+                            .border(1.dp, HexShardTeal.copy(alpha = 0.5f), RoundedCornerShape(18.dp))
+                            .padding(horizontal = 8.dp)
+                            .testTag("claim_hexshard_id_header_btn")
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.PhoneAndroid,
+                                contentDescription = null,
+                                tint = HexShardTealLight,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "+999",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = HexShardTealLight
+                            )
+                        }
+                    }
+                }
+
                 // Settings IconButton
                 IconButton(
                     onClick = onNavigateToSettings,
@@ -534,11 +622,12 @@ fun ChatListItem(
                     )
                 }
 
-                if (chat.status == "online") {
+                if (chat.status == "online" && !isSelfChat && !isAiChat) {
                     OnlinePulseDot(
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
-                            .padding(bottom = 1.dp, end = 1.dp)
+                            .padding(bottom = 1.dp, end = 1.dp),
+                        isDark = isDark
                     )
                 }
             }
@@ -815,7 +904,7 @@ fun ChatArea(
                 fontSize = 14.sp
             )
         }
-        if (chat.status == "online" && !isSelfChat) {
+        if (chat.status == "online" && !isSelfChat && !isAiChat) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -2098,39 +2187,22 @@ fun NewChatDialog(
 }
 
 @Composable
-fun OnlinePulseDot(modifier: Modifier = Modifier) {
-    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-    val scale by infiniteTransition.animateFloat(
-        initialValue = 0.8f,
-        targetValue = 1.6f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1200, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "scale"
-    )
-    val opacity by infiniteTransition.animateFloat(
-        initialValue = 1.0f,
-        targetValue = 0.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1200, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "opacity"
-    )
-
-    Box(modifier = modifier.size(12.dp), contentAlignment = Alignment.Center) {
+fun OnlinePulseDot(
+    modifier: Modifier = Modifier,
+    isDark: Boolean = true
+) {
+    val borderColor = if (isDark) DarkBg else LightBg
+    Box(
+        modifier = modifier
+            .size(11.dp)
+            .background(borderColor, shape = CircleShape)
+            .padding(1.5.dp),
+        contentAlignment = Alignment.Center
+    ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .graphicsLayer(scaleX = scale, scaleY = scale)
-                .background(SpotifyGreen.copy(alpha = opacity), shape = CircleShape)
-        )
-        Box(
-            modifier = Modifier
-                .size(7.dp)
                 .background(SpotifyGreen, shape = CircleShape)
-                .border(2.dp, Color.Black, CircleShape)
         )
     }
 }

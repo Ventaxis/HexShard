@@ -206,7 +206,7 @@ class MessageRepository(
             conversationRepository.updateChatPreview(chatId, text, timeStr, message.timestamp)
 
             val isRemoteAuthed = currentUserId.isNotBlank()
-            if (!isSelfChat && !isAiChat && idempotencyKey.isNotEmpty() && isRemoteAuthed) {
+            if (!isAiChat && idempotencyKey.isNotEmpty() && isRemoteAuthed) {
                 // 1. Enqueue in durable outbox table
                 val outboxEntry = OutboxEntity(
                     accountId = currentUserId,
@@ -215,7 +215,7 @@ class MessageRepository(
                     conversationId = conversationId,
                     idempotencyKey = idempotencyKey,
                     senderId = currentUserId,
-                    recipientId = recipientId,
+                    recipientId = if (isSelfChat) currentUserId else recipientId,
                     payload = encryptedPayload.base64Payload,
                     signature = encryptedPayload.base64Signature,
                     type = type,
@@ -233,7 +233,7 @@ class MessageRepository(
                             idempotencyKey = idempotencyKey,
                             conversationId = conversationId,
                             senderId = currentUserId,
-                            recipientId = recipientId,
+                            recipientId = if (isSelfChat) currentUserId else recipientId,
                             payloadBase64 = encryptedPayload.base64Payload,
                             signatureBase64 = encryptedPayload.base64Signature,
                             type = type,
@@ -317,7 +317,9 @@ class MessageRepository(
                 put("p_client_message_id", idempotencyKey)
                 put("p_payload", payloadBase64)
                 put("p_signature", signatureBase64)
-                if (recipientId.isNotBlank() && !isSelfConversation(recipientId) && !isAiConversation(recipientId)) {
+                if (isSelfConversation(recipientId)) {
+                    put("p_recipient_id", senderId)
+                } else if (recipientId.isNotBlank() && !isAiConversation(recipientId)) {
                     put("p_recipient_id", recipientId)
                 } else {
                     put("p_recipient_id", JSONObject.NULL)

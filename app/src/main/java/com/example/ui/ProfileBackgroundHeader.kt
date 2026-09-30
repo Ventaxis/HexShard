@@ -4,7 +4,6 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,7 +19,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddPhotoAlternate
-import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Wallpaper
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -36,22 +34,21 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.rememberAsyncImagePainter
 import com.example.data.repository.ProfileBackgroundManager
-import com.example.ui.theme.SpotifyGreen
+import com.example.ui.theme.*
 
 /**
- * Visual hero profile header for HexShard Messenger.
+ * Expressive Hero Profile Header for HexShard Messenger.
  * Renders profile background (Image or WebM video) strictly behind:
  * - Avatar
  * - Name
  * - Username
  * - Status / Online indicator
- * Follows dark aesthetic with gradient scrim for maximum text legibility.
+ * Follows dark cinematic aesthetic with layered gradient scrim for maximum text legibility.
  */
 @Composable
 fun ProfileBackgroundHeader(
@@ -76,10 +73,10 @@ fun ProfileBackgroundHeader(
         modifier = modifier
             .fillMaxWidth()
             .height(260.dp)
-            .clip(RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+            .clip(RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp))
+            .background(HexDarkBg)
     ) {
-        // 1. BACKGROUND LAYER (WebM video, Image, or Default dark theme gradient)
+        // 1. BACKGROUND LAYER (WebM video, Image, or Default dark cinematic gradient)
         if (hasBackground) {
             val bgUrl = ProfileBackgroundManager.getPublicUrl(backgroundPath)
             if (isWebm) {
@@ -102,9 +99,9 @@ fun ProfileBackgroundHeader(
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                Color(0xFF132219),
-                                Color(0xFF0F1813),
-                                Color(0xFF0A0F0D)
+                                Color(0xFF0F1E17),
+                                Color(0xFF10191F),
+                                HexDarkBg
                             )
                         )
                     )
@@ -119,8 +116,8 @@ fun ProfileBackgroundHeader(
                     Brush.verticalGradient(
                         colors = listOf(
                             Color(0x66000000),
-                            Color(0x99000000),
-                            Color(0xF00D1115)
+                            Color(0x880A0E12),
+                            Color(0xFA0A0E12)
                         )
                     )
                 )
@@ -130,7 +127,7 @@ fun ProfileBackgroundHeader(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .padding(horizontal = 14.dp, vertical = 10.dp)
                 .align(Alignment.TopEnd),
             horizontalArrangement = Arrangement.End
         ) {
@@ -143,12 +140,13 @@ fun ProfileBackgroundHeader(
                     onClick = onBackgroundActionClick,
                     modifier = Modifier
                         .fillMaxSize()
+                        .hexPressEffect()
                         .testTag("profile_background_action_button")
                 ) {
                     Icon(
                         imageVector = if (hasBackground) Icons.Default.Wallpaper else Icons.Default.AddPhotoAlternate,
                         contentDescription = strings.profileBackground,
-                        tint = if (hasBackground) SpotifyGreen else Color.White,
+                        tint = if (hasBackground) HexShardTeal else Color.White,
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -163,14 +161,14 @@ fun ProfileBackgroundHeader(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            // Avatar with green accent border
+            // Avatar with subtle teal border and tactile touch
             Box(
                 modifier = Modifier
-                    .size(84.dp)
+                    .size(86.dp)
                     .clip(CircleShape)
-                    .border(BorderStroke(2.dp, SpotifyGreen), CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer)
-                    .clickable(onClick = onAvatarClick)
+                    .border(BorderStroke(2.5.dp, HexShardTeal), CircleShape)
+                    .background(HexShardTealContainer)
+                    .hexPressEffect(onClick = onAvatarClick)
                     .testTag("profile_avatar_box"),
                 contentAlignment = Alignment.Center
             ) {
@@ -183,10 +181,10 @@ fun ProfileBackgroundHeader(
                     )
                 } else {
                     Text(
-                        text = name.take(2).uppercase(),
+                        text = name.take(2).uppercase().ifBlank { "HX" },
                         fontSize = 30.sp,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                        color = HexShardOnTealContainer
                     )
                 }
             }
@@ -198,29 +196,30 @@ fun ProfileBackgroundHeader(
                 text = name.ifBlank { "User" },
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
-                color = Color.White
+                color = HexTextPrimary
             )
 
-            // Virtual number / Phone
-            val displayVirtualNumber = if (privateVirtualNumber.isNotBlank()) privateVirtualNumber else phone
-            if (displayVirtualNumber.isNotBlank()) {
+            Spacer(modifier = Modifier.height(2.dp))
+
+            // Username
+            Text(
+                text = "@$username",
+                color = HexTextSecondary,
+                fontSize = 14.sp
+            )
+
+            if (privateVirtualNumber.isNotBlank()) {
+                Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = "${strings.privateNumberLabel}: $displayVirtualNumber",
-                    color = SpotifyGreen,
-                    fontFamily = FontFamily.Monospace,
+                    text = privateVirtualNumber,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    color = HexShardTeal,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold
                 )
             }
 
-            // Username
-            Text(
-                text = "@$username",
-                color = Color(0xFFB3B3B3),
-                fontSize = 14.sp
-            )
-
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             // Online indicator & Account Type Badge
             Row(
@@ -232,12 +231,12 @@ fun ProfileBackgroundHeader(
                     modifier = Modifier
                         .size(8.dp)
                         .clip(CircleShape)
-                        .background(SpotifyGreen)
+                        .background(HexOnlineGreen)
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = strings.onlineStatus,
-                    color = SpotifyGreen,
+                    color = HexShardTealLight,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium
                 )
@@ -246,14 +245,14 @@ fun ProfileBackgroundHeader(
 
                 Surface(
                     shape = RoundedCornerShape(6.dp),
-                    color = Color(0xFF1B382B)
+                    color = HexShardTealContainer
                 ) {
                     Text(
-                        text = if (isTelegramVerified) strings.telegramConnected else strings.phoneAccountBadge,
-                        color = SpotifyGreen,
+                        text = if (isTelegramVerified) strings.telegramConnected else if (privateVirtualNumber.isNotBlank()) "HexShard ID" else strings.phoneAccountBadge,
+                        color = HexShardOnTealContainer,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
                     )
                 }
             }
@@ -264,12 +263,12 @@ fun ProfileBackgroundHeader(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color(0xCC000000)),
+                    .background(Color(0xD9000000)),
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator(
-                        color = SpotifyGreen,
+                        color = HexShardTeal,
                         modifier = Modifier.size(36.dp)
                     )
                     Spacer(modifier = Modifier.height(8.dp))

@@ -113,7 +113,7 @@ fun GradientButton(
     leadingIcon: @Composable (() -> Unit)? = null
 ) {
     val gradient = Brush.horizontalGradient(
-        colors = listOf(Color(0xFF1DB954), Color(0xFF179443))
+        colors = listOf(Color(0xFF03A062), Color(0xFF027A4B))
     )
     Button(
         onClick = onClick,
@@ -387,7 +387,7 @@ fun AuthScreen(onAuthComplete: () -> Unit) {
         }
     }
 
-    Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF08080C)) {
+    Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF0D0F12)) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -433,8 +433,8 @@ fun AuthScreen(onAuthComplete: () -> Unit) {
                                 .clip(RoundedCornerShape(2.dp))
                                 .background(
                                     when {
-                                        i == currentStep -> Color(0xFF1DB954)
-                                        i < currentStep -> Color(0xFF1B4D2E)
+                                        i == currentStep -> Color(0xFF03A062)
+                                        i < currentStep -> Color(0xFF027A4B)
                                         else -> Color(0xFF252538)
                                     }
                                 )

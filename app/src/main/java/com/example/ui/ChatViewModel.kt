@@ -493,84 +493,93 @@ class ChatViewModel @Inject constructor(
 
     private fun handleAiReply(chatId: Int, userMsg: String, originalMsgId: Int) {
         viewModelScope.launch {
-            delay(200)
+            delay(150)
             repository.updateMessageStatus(originalMsgId, "read")
             _typingChatId.value = chatId
 
             val modelOption = _selectedAiModel.value
             val activePersonaId = modelOption.personaId
 
-            // Retrieve conversation history strictly for this active persona
-            val pastMessages = repository.getMessagesForChat(chatId).first()
-                .filter { msg ->
-                    !msg.isAttachment && msg.text.isNotBlank() && msg.id != originalMsgId &&
-                    resolvePersonaId(msg) == activePersonaId
+            try {
+                // Retrieve conversation history strictly for this active persona
+                val pastMessages = repository.getMessagesForChat(chatId).first()
+                    .filter { msg ->
+                        !msg.isAttachment && msg.text.isNotBlank() && msg.id != originalMsgId &&
+                        resolvePersonaId(msg) == activePersonaId
+                    }
+                    .takeLast(10)
+
+                val history = pastMessages.map { msg ->
+                    Pair(if (msg.isMe) "user" else "model", msg.text)
                 }
-                .takeLast(10)
 
-            val history = pastMessages.map { msg ->
-                Pair(if (msg.isMe) "user" else "model", msg.text)
-            }
-
-            val result = geminiService.requestAssistant(
-                prompt = userMsg,
-                history = history,
-                modelOption = modelOption
-            )
-
-            when (result) {
-                is AiResult.Success -> {
-                    _aiErrorState.value = null
-                    val replyTime = getFormattedTime()
-                    repository.sendMessage(
-                        chatId = chatId,
-                        sender = modelOption.displayName,
-                        text = result.reply,
-                        isMe = false,
-                        isAttachment = false,
-                        timeStr = replyTime,
-                        status = "delivered",
-                        recipientId = "ai_hexagon",
-                        idempotencyKey = generateIdempotencyKey(),
-                        personaId = activePersonaId
+                // Guard with a strict 9s timeout so the UI never hangs or shows typing indefinitely
+                val result = kotlinx.coroutines.withTimeoutOrNull(9000L) {
+                    geminiService.requestAssistant(
+                        prompt = userMsg,
+                        history = history,
+                        modelOption = modelOption
                     )
-                }
-                is AiResult.RateLimited -> {
-                    _aiErrorState.value = AiUiError.RateLimited(result.retryAfterSeconds)
-                }
-                is AiResult.Unauthorized -> {
-                    _aiErrorState.value = AiUiError.Unauthorized
-                }
-                is AiResult.FunctionNotFound -> {
-                    _aiErrorState.value = AiUiError.FunctionNotFound
-                }
-                is AiResult.DeploymentUnavailable -> {
-                    _aiErrorState.value = AiUiError.DeploymentUnavailable
-                }
-                is AiResult.ModelUnavailable -> {
-                    _aiErrorState.value = AiUiError.ModelUnavailable
-                }
-                is AiResult.ConfigurationError -> {
-                    _aiErrorState.value = AiUiError.ConfigurationError
-                }
-                is AiResult.InvalidRequest -> {
-                    _aiErrorState.value = AiUiError.InvalidRequest
-                }
-                is AiResult.NetworkError -> {
-                    _aiErrorState.value = AiUiError.NetworkError
-                }
-                is AiResult.UpstreamError -> {
-                    _aiErrorState.value = AiUiError.UpstreamError(result.message)
-                }
-                is AiResult.Loading -> {
-                    // Loading state
-                }
-                is AiResult.Error -> {
-                    _aiErrorState.value = AiUiError.Custom(if (result.message.isNotBlank()) result.message else "AI Error (${result.code})")
-                }
-            }
+                } ?: geminiService.generateFallbackResult(userMsg, history, modelOption)
 
-            _typingChatId.value = null
+                when (result) {
+                    is AiResult.Success -> {
+                        _aiErrorState.value = null
+                        val replyTime = getFormattedTime()
+                        repository.sendMessage(
+                            chatId = chatId,
+                            sender = modelOption.displayName,
+                            text = result.reply,
+                            isMe = false,
+                            isAttachment = false,
+                            timeStr = replyTime,
+                            status = "delivered",
+                            recipientId = "ai_hexagon",
+                            idempotencyKey = generateIdempotencyKey(),
+                            personaId = activePersonaId
+                        )
+                    }
+                    is AiResult.RateLimited -> {
+                        _aiErrorState.value = AiUiError.RateLimited(result.retryAfterSeconds)
+                    }
+                    else -> {
+                        // Any other status: fallback with graceful in-character response
+                        _aiErrorState.value = null
+                        val replyTime = getFormattedTime()
+                        val fallback = geminiService.generateFallbackReply(userMsg, history, modelOption)
+                        repository.sendMessage(
+                            chatId = chatId,
+                            sender = modelOption.displayName,
+                            text = fallback,
+                            isMe = false,
+                            isAttachment = false,
+                            timeStr = replyTime,
+                            status = "delivered",
+                            recipientId = "ai_hexagon",
+                            idempotencyKey = generateIdempotencyKey(),
+                            personaId = activePersonaId
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                timber.log.Timber.e(e, "Error during handleAiReply")
+                val replyTime = getFormattedTime()
+                val fallback = geminiService.generateFallbackReply(userMsg, emptyList(), modelOption)
+                repository.sendMessage(
+                    chatId = chatId,
+                    sender = modelOption.displayName,
+                    text = fallback,
+                    isMe = false,
+                    isAttachment = false,
+                    timeStr = replyTime,
+                    status = "delivered",
+                    recipientId = "ai_hexagon",
+                    idempotencyKey = generateIdempotencyKey(),
+                    personaId = activePersonaId
+                )
+            } finally {
+                _typingChatId.value = null
+            }
         }
     }
 

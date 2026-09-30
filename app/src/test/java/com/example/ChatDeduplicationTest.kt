@@ -200,4 +200,35 @@ class ChatDeduplicationTest {
         assertEquals("direct_userA_userB", direct1)
         assertEquals(direct1, direct2)
     }
+
+    @Test
+    fun testBuiltInChatsStatusIsNotOnline() {
+        val savedChat = ChatEntity(
+            id = 1,
+            name = "Saved Messages",
+            ava = "SM",
+            status = "",
+            preview = "Welcome",
+            time = "12:00",
+            recipientId = "self",
+            conversationId = "self_user1",
+            conversationType = com.example.data.ConversationType.SAVED_MESSAGES.name,
+            accountId = "user1"
+        )
+        val aiChat = ChatEntity(
+            id = 2,
+            name = "Hexagon AI",
+            ava = "HX",
+            status = "",
+            preview = "Assistant",
+            time = "12:00",
+            recipientId = "ai_hexagon",
+            conversationId = "ai_hexagon_user1",
+            conversationType = com.example.data.ConversationType.AI_ASSISTANT.name,
+            accountId = "user1"
+        )
+
+        org.junit.Assert.assertNotEquals("online", savedChat.status)
+        org.junit.Assert.assertNotEquals("online", aiChat.status)
+    }
 }

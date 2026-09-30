@@ -3,6 +3,7 @@ package com.example.network.supabase
 import android.content.Context
 import com.example.data.AccountType
 import com.example.data.SecurePrefsManager
+import com.example.util.VirtualNumberGenerator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -74,7 +75,7 @@ object SessionManager {
         val anonKey = SupabaseConfig.getAnonKey(context)
         if (anonKey.isBlank()) {
             Timber.w("Supabase anon key not configured; falling back to offline cached session")
-            val vNum = SecurePrefsManager.getPrivateVirtualNumber(context)
+            val vNum = SecurePrefsManager.getPrivateVirtualNumber(context, userId)
             val isTg = SecurePrefsManager.isTelegramVerified(context)
             val session = SessionData(
                 userId = userId,
@@ -99,7 +100,7 @@ object SessionManager {
 
             val resp = httpClient.newCall(req).execute()
             if (resp.isSuccessful) {
-                val vNum = SecurePrefsManager.getPrivateVirtualNumber(context)
+                val vNum = SecurePrefsManager.getPrivateVirtualNumber(context, userId)
                 val isTg = SecurePrefsManager.isTelegramVerified(context)
                 val session = SessionData(
                     userId = userId,
@@ -122,7 +123,7 @@ object SessionManager {
             }
         } catch (e: Exception) {
             Timber.w(e, "Network exception during Supabase session validation. Using AUTHENTICATED_OFFLINE_CACHED.")
-            val vNum = SecurePrefsManager.getPrivateVirtualNumber(context)
+            val vNum = SecurePrefsManager.getPrivateVirtualNumber(context, userId)
             val isTg = SecurePrefsManager.isTelegramVerified(context)
             val session = SessionData(
                 userId = userId,
@@ -144,10 +145,11 @@ object SessionManager {
             val currentStoredAccess = SecurePrefsManager.getSupabaseAccessToken(context)
             val currentStoredRefresh = SecurePrefsManager.getSupabaseRefreshToken(context)
             if (currentStoredRefresh.isNotBlank() && currentStoredRefresh != refreshToken && currentStoredAccess.isNotBlank()) {
-                val vNum = SecurePrefsManager.getPrivateVirtualNumber(context)
+                val uid = SecurePrefsManager.getUserId(context)
+                val vNum = SecurePrefsManager.getPrivateVirtualNumber(context, uid)
                 val isTg = SecurePrefsManager.isTelegramVerified(context)
                 val session = SessionData(
-                    userId = SecurePrefsManager.getUserId(context),
+                    userId = uid,
                     username = SecurePrefsManager.getUsername(context),
                     accessToken = currentStoredAccess,
                     refreshToken = currentStoredRefresh,
@@ -242,7 +244,23 @@ object SessionManager {
             accountType = AccountType.PHONE // Registered server-backed account
         )
         SecurePrefsManager.saveSupabaseTokens(context, accessToken, refreshToken)
-        SecurePrefsManager.setPrivateVirtualNumber(context, virtualNumber)
+
+        // Account-scoped virtual number handling:
+        // 1. If server provides a valid virtualNumber, save it for this userId.
+        // 2. If server provides blank (e.g. transient error during login), check if this exact account
+        //    already holds a valid local cached number. If so, preserve it instead of wiping.
+        val finalVirtualNumber = if (virtualNumber.isNotBlank()) {
+            SecurePrefsManager.setPrivateVirtualNumber(context, virtualNumber, userId)
+            VirtualNumberGenerator.format8Digits(virtualNumber)
+        } else {
+            val existingForAccount = SecurePrefsManager.getPrivateVirtualNumber(context, userId)
+            if (existingForAccount.isNotBlank()) {
+                existingForAccount
+            } else {
+                ""
+            }
+        }
+
         SecurePrefsManager.setTelegramVerified(context, isTelegramVerified)
 
         val session = SessionData(
@@ -251,7 +269,7 @@ object SessionManager {
             accessToken = accessToken,
             refreshToken = refreshToken,
             isTelegramVerified = isTelegramVerified,
-            virtualNumber = virtualNumber
+            virtualNumber = finalVirtualNumber
         )
         _currentSession.value = session
         _authState.value = AuthState.AUTHENTICATED
@@ -263,11 +281,15 @@ object SessionManager {
     }
 
     fun updateVirtualNumber(context: Context, virtualNumber: String) {
-        SecurePrefsManager.setPrivateVirtualNumber(context, virtualNumber)
-        _currentSession.value = _currentSession.value?.copy(virtualNumber = virtualNumber)
+        val uid = _currentSession.value?.userId ?: SecurePrefsManager.getUserId(context)
+        SecurePrefsManager.setPrivateVirtualNumber(context, virtualNumber, uid)
+        val formatted = if (virtualNumber.isNotBlank()) VirtualNumberGenerator.format8Digits(virtualNumber) else ""
+        _currentSession.value = _currentSession.value?.copy(virtualNumber = formatted)
     }
 
     fun clearSession(context: Context) {
+        val uid = _currentSession.value?.userId ?: SecurePrefsManager.getUserId(context)
+        SecurePrefsManager.clearPrivateVirtualNumber(context, uid)
         SecurePrefsManager.clear(context)
         _currentSession.value = null
         _authState.value = AuthState.UNAUTHENTICATED

@@ -93,18 +93,42 @@ object SecurePrefsManager {
         return getPrefs(context).getString("phone", "") ?: ""
     }
 
+    fun getBio(context: Context): String {
+        return getPrefs(context).getString("profile_bio", "") ?: ""
+    }
+
+    fun setBio(context: Context, bio: String) {
+        getPrefs(context).edit().putString("profile_bio", bio).apply()
+    }
+
+    fun getDateOfBirth(context: Context): String {
+        return getPrefs(context).getString("profile_dob", "") ?: ""
+    }
+
+    fun setDateOfBirth(context: Context, dob: String) {
+        getPrefs(context).edit().putString("profile_dob", dob).apply()
+    }
+
     /**
      * Returns the formatted private virtual +999 identity number (+999 XXXX XXXX).
+     * Account-isolated: strictly loads the number bound to [accountId] (or the active session userId if omitted).
      */
-    fun getPrivateVirtualNumber(context: Context): String {
-        val raw = getPrefs(context).getString("private_virtual_number", "") ?: ""
-        if (raw.isNotBlank()) {
-            return VirtualNumberGenerator.format8Digits(raw)
+    fun getPrivateVirtualNumber(context: Context, accountId: String? = null): String {
+        val targetId = accountId?.trim()?.ifBlank { null } ?: getUserId(context).trim().ifBlank { null }
+        val prefs = getPrefs(context)
+        if (targetId != null) {
+            val accountRaw = prefs.getString("private_virtual_number_$targetId", "") ?: ""
+            if (accountRaw.isNotBlank()) {
+                val digits = VirtualNumberGenerator.extractRaw8Digits(accountRaw) ?: accountRaw.filter { it.isDigit() }
+                if (digits.length == 8) return VirtualNumberGenerator.format8Digits(digits)
+            }
+            // Strict account isolation: if an accountId is resolved, NEVER fall back to another account's number
+            return ""
         }
-        val legacy = getPrefs(context).getString("virtual_number", "") ?: ""
-        if (legacy.isNotBlank()) {
-            val extracted = VirtualNumberGenerator.extractRaw8Digits(legacy) ?: legacy.filter { it.isDigit() }
-            return VirtualNumberGenerator.format8Digits(extracted)
+        val raw = prefs.getString("private_virtual_number", "") ?: ""
+        if (raw.isNotBlank()) {
+            val digits = VirtualNumberGenerator.extractRaw8Digits(raw) ?: raw.filter { it.isDigit() }
+            if (digits.length == 8) return VirtualNumberGenerator.format8Digits(digits)
         }
         return ""
     }
@@ -112,23 +136,63 @@ object SecurePrefsManager {
     /**
      * Returns the canonical raw 8 digits of the private virtual identity (e.g. "67676767").
      */
-    fun getRawPrivateVirtualNumber(context: Context): String {
-        val raw = getPrefs(context).getString("private_virtual_number", "") ?: ""
-        if (raw.isNotBlank()) return raw
-        val legacy = getPrefs(context).getString("virtual_number", "") ?: ""
-        return VirtualNumberGenerator.extractRaw8Digits(legacy) ?: legacy.filter { it.isDigit() }
+    fun getRawPrivateVirtualNumber(context: Context, accountId: String? = null): String {
+        val targetId = accountId?.trim()?.ifBlank { null } ?: getUserId(context).trim().ifBlank { null }
+        val prefs = getPrefs(context)
+        if (targetId != null) {
+            val accountRaw = prefs.getString("private_virtual_number_$targetId", "") ?: ""
+            if (accountRaw.isNotBlank()) {
+                val digits = VirtualNumberGenerator.extractRaw8Digits(accountRaw) ?: accountRaw.filter { it.isDigit() }
+                if (digits.length == 8) return digits
+            }
+            // Strict account isolation: if an accountId is resolved, NEVER fall back to another account's number
+            return ""
+        }
+        val raw = prefs.getString("private_virtual_number", "") ?: ""
+        if (raw.isNotBlank()) {
+            val digits = VirtualNumberGenerator.extractRaw8Digits(raw) ?: raw.filter { it.isDigit() }
+            if (digits.length == 8) return digits
+        }
+        return ""
     }
 
     /**
      * Persists the private virtual number as canonical 8 raw digits.
      * Note: Does NOT pollute the regular cellular phone field.
+     * Prevents empty-string wipe regressions: If [numberOrDigits] is blank,
+     * existing valid cached numbers for this account are preserved.
+     * Use [clearPrivateVirtualNumber] to explicitly clear.
      */
-    fun setPrivateVirtualNumber(context: Context, numberOrDigits: String) {
-        val rawDigits = VirtualNumberGenerator.extractRaw8Digits(numberOrDigits) 
-            ?: numberOrDigits.filter { it.isDigit() }.takeLast(8)
-        getPrefs(context).edit()
-            .putString("private_virtual_number", rawDigits)
-            .apply()
+    fun setPrivateVirtualNumber(context: Context, numberOrDigits: String, accountId: String? = null) {
+        val targetId = accountId?.trim()?.ifBlank { null } ?: getUserId(context).trim().ifBlank { null }
+        val rawDigits = VirtualNumberGenerator.extractRaw8Digits(numberOrDigits)
+            ?: numberOrDigits.filter { it.isDigit() }.let { if (it.length == 8) it else null }
+
+        if (rawDigits != null && rawDigits.length == 8) {
+            val editor = getPrefs(context).edit()
+            editor.putString("private_virtual_number", rawDigits)
+            if (targetId != null) {
+                editor.putString("private_virtual_number_$targetId", rawDigits)
+            }
+            editor.apply()
+        } else if (numberOrDigits.isBlank()) {
+            // DO NOT wipe existing valid number on empty string, preventing login/signup race regression.
+            Timber.d("setPrivateVirtualNumber called with blank value; preserving existing record for account: $targetId")
+        }
+    }
+
+    /**
+     * Explicitly clears the virtual number for an account and active session.
+     */
+    fun clearPrivateVirtualNumber(context: Context, accountId: String? = null) {
+        val targetId = accountId?.trim()?.ifBlank { null } ?: getUserId(context).trim().ifBlank { null }
+        val editor = getPrefs(context).edit()
+        editor.remove("private_virtual_number")
+        editor.remove("virtual_number")
+        if (targetId != null) {
+            editor.remove("private_virtual_number_$targetId")
+        }
+        editor.apply()
     }
 
     fun isTelegramVerified(context: Context): Boolean {
@@ -268,6 +332,14 @@ object SecurePrefsManager {
 
     fun setSyncCursor(context: Context, accountId: String, cursor: Long) {
         getPrefs(context).edit().putLong("sync_cursor_${accountId}", cursor).apply()
+    }
+
+    fun isHexShardPromptDismissed(context: Context, accountId: String): Boolean {
+        return getPrefs(context).getBoolean("hexshard_prompt_dismissed_${accountId}", false)
+    }
+
+    fun setHexShardPromptDismissed(context: Context, accountId: String, dismissed: Boolean) {
+        getPrefs(context).edit().putBoolean("hexshard_prompt_dismissed_${accountId}", dismissed).apply()
     }
 
     fun clear(context: Context) {

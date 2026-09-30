@@ -159,6 +159,14 @@ class SupabaseRealtimeManager(
                                 put("filter", "recipient_id=eq.$currentUserId")
                             }
                         )
+                        put(
+                            JSONObject().apply {
+                                put("event", "*")
+                                put("schema", "public")
+                                put("table", "messages")
+                                put("filter", "sender_id=eq.$currentUserId")
+                            }
+                        )
                     }
                     put("postgres_changes", pgChanges)
                 }

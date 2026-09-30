@@ -217,7 +217,26 @@ data class AppStrings(
     val fileTooLargeError: String,
     val unsupportedFileFormat: String,
     val backgroundUploadFailed: String,
-    val onlineStatus: String
+    val onlineStatus: String,
+    val bio: String,
+    val dateOfBirth: String,
+    val notSpecified: String,
+    val startChatting: String,
+    val emptyChatSub: String,
+    val profileDetails: String,
+    val copyUsername: String,
+    val usernameCopied: String,
+    val phoneCopied: String,
+    val noHexShardIdTitle: String,
+    val noHexShardIdDesc: String,
+    val continueAction: String,
+    val laterAction: String,
+    val claimHexShardId: String,
+    val reserveNewNumber: String,
+    val confirmAndActivate: String,
+    val virtualNumberActivatedSuccess: String,
+    val selectBirthDate: String,
+    val birthDateHint: String
 )
 
 val EnglishStrings = AppStrings(
@@ -417,7 +436,26 @@ val EnglishStrings = AppStrings(
     fileTooLargeError = "File is too large. Maximum size is 512 KB.",
     unsupportedFileFormat = "Unsupported file format. Please select an image (JPEG, PNG, WEBP, GIF) or WebM video.",
     backgroundUploadFailed = "Failed to upload profile background",
-    onlineStatus = "Online"
+    onlineStatus = "Online",
+    bio = "Bio",
+    dateOfBirth = "Date of Birth",
+    notSpecified = "Not specified",
+    startChatting = "Start Chatting",
+    emptyChatSub = "Your conversations are end-to-end encrypted. Tap below to start your first chat.",
+    profileDetails = "Personal Info",
+    copyUsername = "Copy Username",
+    usernameCopied = "Username copied to clipboard",
+    phoneCopied = "Phone number copied to clipboard",
+    noHexShardIdTitle = "No HexShard ID",
+    noHexShardIdDesc = "This account doesn't have an attached +999 virtual number yet. It is used as an additional HexShard identity and may be needed for account recovery features.",
+    continueAction = "Continue",
+    laterAction = "Later",
+    claimHexShardId = "Get +999 Number",
+    reserveNewNumber = "Get another number",
+    confirmAndActivate = "Confirm & Activate",
+    virtualNumberActivatedSuccess = "HexShard ID successfully activated!",
+    selectBirthDate = "Select Date of Birth",
+    birthDateHint = "e.g. 13 April 1998"
 )
 
 val RussianStrings = AppStrings(
@@ -617,7 +655,26 @@ val RussianStrings = AppStrings(
     fileTooLargeError = "Файл слишком большой. Максимальный размер 512 КБ.",
     unsupportedFileFormat = "Неподдерживаемый формат. Выберите изображение (JPEG, PNG, WEBP, GIF) или WebM-видео.",
     backgroundUploadFailed = "Не удалось загрузить фон профиля",
-    onlineStatus = "В сети"
+    onlineStatus = "В сети",
+    bio = "О себе",
+    dateOfBirth = "Дата рождения",
+    notSpecified = "Не указано",
+    startChatting = "Начать общение",
+    emptyChatSub = "Ваши переписки защищены сквозным шифрованием. Нажмите кнопку, чтобы начать первый чат.",
+    profileDetails = "Личная информация",
+    copyUsername = "Скопировать имя пользователя",
+    usernameCopied = "Имя пользователя скопировано",
+    phoneCopied = "Номер телефона скопирован",
+    noHexShardIdTitle = "Нет HexShard ID",
+    noHexShardIdDesc = "У этого аккаунта ещё нет привязанного виртуального номера +999. Он используется как дополнительная идентификация HexShard и может быть нужен для некоторых функций восстановления аккаунта.",
+    continueAction = "Продолжить",
+    laterAction = "Позже",
+    claimHexShardId = "Получить номер +999",
+    reserveNewNumber = "Получить другой номер",
+    confirmAndActivate = "Подтвердить и активировать",
+    virtualNumberActivatedSuccess = "HexShard ID успешно активирован!",
+    selectBirthDate = "Выберите дату рождения",
+    birthDateHint = "например, 13 апреля 1998"
 )
 
 val LocalStrings = staticCompositionLocalOf { EnglishStrings }

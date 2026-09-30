@@ -27,6 +27,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -35,6 +36,8 @@ import androidx.compose.ui.unit.sp
 import coil.compose.rememberAsyncImagePainter
 import com.example.R
 
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.ui.graphics.Color
@@ -42,7 +45,10 @@ import androidx.compose.ui.graphics.asImageBitmap
 import com.example.network.supabase.ChallengeVerifyResult
 import com.example.network.supabase.SupabaseAuthService
 import com.example.network.supabase.TelegramChallenge
-import com.example.ui.theme.SpotifyGreen
+import com.example.ui.theme.*
+import com.example.ui.HexCard
+import com.example.ui.HexSectionHeader
+import com.example.ui.hexPressEffect
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -72,6 +78,8 @@ fun SettingsScreen(
     var username by remember { mutableStateOf(initialUsername) }
     var phone by remember { mutableStateOf(initialPhone) }
     var avatarUri by remember { mutableStateOf(initialAvatar) }
+    var bio by remember { mutableStateOf(com.example.data.SecurePrefsManager.getBio(context)) }
+    var dateOfBirth by remember { mutableStateOf(com.example.data.SecurePrefsManager.getDateOfBirth(context)) }
 
     var showEditProfile by remember { mutableStateOf(false) }
     var showPrivacyDialog by remember { mutableStateOf(false) }
@@ -87,6 +95,8 @@ fun SettingsScreen(
     var scannedProfile by remember { mutableStateOf<com.example.util.ProfileQrData?>(null) }
     var manualQrInput by remember { mutableStateOf("") }
     var qrStatusMessage by remember { mutableStateOf<String?>(null) }
+    var showClaimHexShardDialog by remember { mutableStateOf(false) }
+    var showDatePickerDialog by remember { mutableStateOf(false) }
 
     // Privacy & Backup dialog state
     var backupPassphrase by remember { mutableStateOf("") }
@@ -109,7 +119,10 @@ fun SettingsScreen(
 
     val accountId = remember { com.example.data.SecurePrefsManager.getAccountId(context) }
     val currentUserId = remember { com.example.data.SecurePrefsManager.getUserId(context) }
-    val privateVirtualNumber = remember { com.example.data.SecurePrefsManager.getPrivateVirtualNumber(context) }
+    val currentSession by com.example.network.supabase.SessionManager.currentSession.collectAsState()
+    val activeVirtualNumber = currentSession?.virtualNumber?.takeIf { it.isNotBlank() }
+        ?: com.example.data.SecurePrefsManager.getPrivateVirtualNumber(context, currentUserId)
+    val privateVirtualNumber = activeVirtualNumber
     var isTelegramVerified by remember { mutableStateOf(com.example.data.SecurePrefsManager.isTelegramVerified(context)) }
     var tgChallenge by remember { mutableStateOf<TelegramChallenge?>(null) }
     var tgCodeInput by remember { mutableStateOf("") }
@@ -133,6 +146,11 @@ fun SettingsScreen(
             if (bgInfo != null) {
                 profileBgPath = bgInfo.storagePath
                 profileBgType = bgInfo.mimeType
+            }
+            // Fetch active virtual number from server if available
+            val token = com.example.data.SecurePrefsManager.getSupabaseAccessToken(context)
+            if (token.isNotBlank()) {
+                com.example.network.supabase.VirtualNumberService.fetchActiveVirtualNumber(currentUserId, token, context)
             }
         }
     }
@@ -318,6 +336,30 @@ fun SettingsScreen(
             }
             avatarUri = uri.toString()
             com.example.data.SecurePrefsManager.setAvatarUri(context, uri.toString())
+
+            // Upload avatar to Supabase Storage avatars bucket in background
+            val token = com.example.data.SecurePrefsManager.getSupabaseAccessToken(context)
+            if (currentUserId.isNotBlank() && token.isNotBlank()) {
+                scope.launch {
+                    try {
+                        val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                        if (bytes != null && bytes.isNotEmpty()) {
+                            val mime = context.contentResolver.getType(uri) ?: "image/jpeg"
+                            val publicUrl = com.example.data.repository.ProfileRepository(context).uploadAvatar(
+                                userId = currentUserId,
+                                token = token,
+                                imageBytes = bytes,
+                                mimeType = mime
+                            )
+                            if (publicUrl != null) {
+                                avatarUri = publicUrl
+                            }
+                        }
+                    } catch (e: Exception) {
+                        timber.log.Timber.w(e, "Avatar upload error")
+                    }
+                }
+            }
         }
     }
 
@@ -697,8 +739,23 @@ fun SettingsScreen(
     }
 
     if (showEditProfile) {
+        val isRussian = currentLang == AppLanguage.RUSSIAN
         var editName by remember { mutableStateOf(name) }
         var editUsername by remember { mutableStateOf(username) }
+        var editBio by remember { mutableStateOf(bio) }
+        var editDob by remember { mutableStateOf(com.example.util.DateOfBirthFormatter.formatForDisplay(dateOfBirth, isRussian)) }
+
+        if (showDatePickerDialog) {
+            BirthDateWheelPickerDialog(
+                initialDateStr = editDob,
+                isRussian = isRussian,
+                onDismissRequest = { showDatePickerDialog = false },
+                onDateSelected = { selectedDate ->
+                    editDob = selectedDate
+                    showDatePickerDialog = false
+                }
+            )
+        }
 
         AlertDialog(
             onDismissRequest = { showEditProfile = false },
@@ -742,15 +799,107 @@ fun SettingsScreen(
                         value = editName,
                         onValueChange = { editName = it },
                         label = { Text(strings.name) },
-                        singleLine = true
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = editUsername,
                         onValueChange = { editUsername = it },
                         label = { Text(strings.username) },
-                        singleLine = true
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
                     )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = editBio,
+                        onValueChange = { if (it.length <= 160) editBio = it },
+                        label = { Text(strings.bio) },
+                        maxLines = 3,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = editDob,
+                        onValueChange = { input ->
+                            editDob = com.example.util.DateOfBirthFormatter.autoFormatTyping(input, isRussian)
+                        },
+                        label = { Text(strings.dateOfBirth) },
+                        singleLine = true,
+                        placeholder = { Text(strings.birthDateHint) },
+                        trailingIcon = {
+                            IconButton(onClick = { showDatePickerDialog = true }) {
+                                Icon(
+                                    imageVector = Icons.Default.DateRange,
+                                    contentDescription = strings.selectBirthDate,
+                                    tint = HexShardTealLight,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        },
+                        supportingText = {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                val formattedPreview = com.example.util.DateOfBirthFormatter.formatForDisplay(editDob, isRussian)
+                                Text(
+                                    text = if (formattedPreview.isNotBlank()) formattedPreview else strings.birthDateHint,
+                                    color = if (formattedPreview.isNotBlank()) HexShardTealLight else HexTextSecondary.copy(alpha = 0.7f),
+                                    fontSize = 11.sp,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
+                                Text(
+                                    text = strings.selectBirthDate,
+                                    color = HexShardTeal,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.clickable { showDatePickerDialog = true }
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                showEditProfile = false
+                                showClaimHexShardDialog = true
+                            },
+                        shape = RoundedCornerShape(12.dp),
+                        color = HexDarkSurfaceInput,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, HexDarkBorderSubtle)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column {
+                                Text(
+                                    text = strings.virtualNumberLabel,
+                                    fontSize = 11.sp,
+                                    color = HexTextSecondary
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = if (privateVirtualNumber.isNotBlank()) privateVirtualNumber else strings.claimHexShardId,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (privateVirtualNumber.isNotBlank()) HexTextPrimary else HexShardTealLight
+                                )
+                            }
+                            Text(
+                                text = if (privateVirtualNumber.isNotBlank()) strings.reserveNewNumber else "+999",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = HexShardTealLight
+                            )
+                        }
+                    }
                     Spacer(modifier = Modifier.height(12.dp))
                     OutlinedButton(
                         onClick = {
@@ -769,10 +918,30 @@ fun SettingsScreen(
                 TextButton(onClick = {
                     name = editName
                     username = editUsername
+                    bio = editBio
+                    val finalDob = com.example.util.DateOfBirthFormatter.formatForDisplay(editDob, isRussian)
+                    dateOfBirth = finalDob
                     com.example.data.SecurePrefsManager.getPrefs(context).edit()
                         .putString("name", name)
                         .putString("username", username)
                         .apply()
+                    com.example.data.SecurePrefsManager.setBio(context, editBio)
+                    com.example.data.SecurePrefsManager.setDateOfBirth(context, finalDob)
+
+                    // Asynchronously sync profile to Supabase
+                    val token = com.example.data.SecurePrefsManager.getSupabaseAccessToken(context)
+                    if (currentUserId.isNotBlank() && token.isNotBlank()) {
+                        scope.launch {
+                            com.example.data.repository.ProfileRepository(context).syncProfileToServer(
+                                userId = currentUserId,
+                                token = token,
+                                bio = editBio,
+                                dob = finalDob,
+                                username = editUsername
+                            )
+                        }
+                    }
+
                     showEditProfile = false
                 }) { Text(strings.save) }
             },
@@ -1196,14 +1365,46 @@ fun SettingsScreen(
     }
 
     Scaffold(
+        containerColor = HexDarkBg,
         topBar = {
             TopAppBar(
-                title = { Text(strings.settings) },
+                title = {
+                    Text(
+                        strings.profile,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = HexTextPrimary
+                    )
+                },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier.hexPressEffect()
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = HexTextPrimary
+                        )
                     }
-                }
+                },
+                actions = {
+                    IconButton(
+                        onClick = { showEditProfile = true },
+                        modifier = Modifier.hexPressEffect()
+                    ) {
+                        Icon(
+                            Icons.Default.Edit,
+                            contentDescription = strings.editProfile,
+                            tint = HexShardTeal
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = HexDarkBg,
+                    titleContentColor = HexTextPrimary,
+                    navigationIconContentColor = HexTextPrimary
+                )
             )
         }
     ) { padding ->
@@ -1213,7 +1414,7 @@ fun SettingsScreen(
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
         ) {
-            // Profile Hero Header with Background (WebM video or Image) behind avatar, name, username, and status
+            // 1. Profile Hero Header with Background (WebM video or Image)
             ProfileBackgroundHeader(
                 name = name,
                 username = username,
@@ -1228,36 +1429,200 @@ fun SettingsScreen(
                 onBackgroundActionClick = { showBgOptionsDialog = true }
             )
 
-            // Cryptographic Identity & Telegram Bot Card
-            Card(
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // HexShard ID banner if not yet claimed
+            if (privateVirtualNumber.isBlank()) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .clickable { showClaimHexShardDialog = true }
+                        .testTag("banner_claim_hexshard_id"),
+                    shape = RoundedCornerShape(16.dp),
+                    color = HexDarkSurfaceElevated,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, HexShardTeal.copy(alpha = 0.5f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(42.dp)
+                                .clip(CircleShape)
+                                .background(HexShardTealContainer),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PhoneAndroid,
+                                contentDescription = null,
+                                tint = HexShardTealLight,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = strings.claimHexShardId,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = HexTextPrimary
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = strings.noHexShardIdDesc,
+                                fontSize = 11.sp,
+                                color = HexTextSecondary,
+                                lineHeight = 15.sp,
+                                maxLines = 2,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = { showClaimHexShardDialog = true },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = HexShardTeal,
+                                contentColor = Color.White
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text(strings.continueAction, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
+            // 2. Personal Information & Identity Card (Expressive human profile details)
+            HexCard(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF12121D)),
-                border = BorderStroke(1.dp, Color(0xFF252538))
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                containerColor = HexDarkSurface,
+                borderColor = HexDarkBorder
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = strings.accountIdLabel.uppercase(),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF1DB954),
-                        letterSpacing = 1.2.sp
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = accountId.ifBlank { "—" },
-                            fontSize = 12.sp,
-                            fontFamily = FontFamily.Monospace,
-                            color = Color.White,
-                            modifier = Modifier.weight(1f)
+                            text = strings.profileDetails.uppercase(),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = HexShardTeal,
+                            letterSpacing = 1.1.sp
                         )
+                        IconButton(
+                            onClick = { showEditProfile = true },
+                            modifier = Modifier.size(28.dp).hexPressEffect()
+                        ) {
+                            Icon(
+                                Icons.Default.Edit,
+                                contentDescription = strings.editProfile,
+                                tint = HexTextSecondary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // HexShard Virtual Number (+999 identity) - Always prioritized
+                    if (privateVirtualNumber.isNotBlank()) {
+                        ProfileInfoRow(
+                            label = strings.virtualNumberLabel,
+                            value = privateVirtualNumber,
+                            isAccent = true,
+                            badge = "HexShard ID",
+                            onClick = { showClaimHexShardDialog = true },
+                            onCopy = {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                clipboard.setPrimaryClip(ClipData.newPlainText("Virtual Number", privateVirtualNumber))
+                                Toast.makeText(context, strings.privateNumberCopied, Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = HexDarkBorderSubtle)
+                    } else {
+                        ProfileInfoRow(
+                            label = strings.virtualNumberLabel,
+                            value = strings.claimHexShardId,
+                            isAccent = true,
+                            badge = "+999",
+                            onClick = { showClaimHexShardDialog = true }
+                        )
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = HexDarkBorderSubtle)
+                    }
+
+                    // Cellular Phone (if specified and distinct from virtual number)
+                    if (phone.isNotBlank() && !com.example.util.VirtualNumberGenerator.isVirtual(phone)) {
+                        ProfileInfoRow(
+                            label = strings.phone,
+                            value = phone,
+                            onCopy = {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                clipboard.setPrimaryClip(ClipData.newPlainText("Phone", phone))
+                                Toast.makeText(context, strings.phoneCopied, Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = HexDarkBorderSubtle)
+                    }
+
+                    // Username
+                    ProfileInfoRow(
+                        label = strings.username,
+                        value = "@$username",
+                        onCopy = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText("Username", "@$username"))
+                            Toast.makeText(context, strings.usernameCopied, Toast.LENGTH_SHORT).show()
+                        }
+                    )
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = HexDarkBorderSubtle)
+
+                    // Bio / About
+                    ProfileInfoRow(
+                        label = strings.bio,
+                        value = bio.ifBlank { strings.aboutDescription },
+                        onClick = { showEditProfile = true }
+                    )
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = HexDarkBorderSubtle)
+
+                    // Date of Birth
+                    val isRussianLang = currentLang == AppLanguage.RUSSIAN
+                    ProfileInfoRow(
+                        label = strings.dateOfBirth,
+                        value = com.example.util.DateOfBirthFormatter.formatForDisplay(dateOfBirth, isRussianLang).ifBlank { strings.notSpecified },
+                        onClick = { showEditProfile = true }
+                    )
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = HexDarkBorderSubtle)
+
+                    // Account ID (Cryptographic Identity)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = strings.accountIdLabel,
+                                fontSize = 11.sp,
+                                color = HexTextSecondary
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = accountId.ifBlank { "—" },
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = HexTextPrimary
+                            )
+                        }
                         IconButton(
                             onClick = {
                                 if (accountId.isNotBlank()) {
@@ -1266,37 +1631,31 @@ fun SettingsScreen(
                                     Toast.makeText(context, strings.accountIdCopied, Toast.LENGTH_SHORT).show()
                                 }
                             },
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier.size(32.dp).hexPressEffect()
                         ) {
                             Icon(
                                 Icons.Default.ContentCopy,
                                 contentDescription = strings.copyAccountId,
-                                tint = Color(0xFF1DB954),
+                                tint = HexShardTeal,
                                 modifier = Modifier.size(16.dp)
                             )
                         }
                         IconButton(
                             onClick = { showQrDialog = true },
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier.size(32.dp).hexPressEffect()
                         ) {
                             Icon(
                                 Icons.Default.QrCode,
                                 contentDescription = "Show QR Code",
-                                tint = Color(0xFF1DB954),
+                                tint = HexShardTeal,
                                 modifier = Modifier.size(18.dp)
                             )
                         }
                     }
-                    Text(
-                        text = strings.accountIdDescription,
-                        fontSize = 11.sp,
-                        color = Color(0xFF8B8B9E),
-                        lineHeight = 15.sp
-                    )
 
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = Color(0xFF222232))
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = HexDarkBorderSubtle)
 
-                    // Telegram 2FA Gateway Row
+                    // Telegram 2FA Row
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1304,15 +1663,15 @@ fun SettingsScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Telegram (@HexShardBot)",
+                                text = "Telegram 2FA Gateway",
                                 fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
+                                fontWeight = FontWeight.SemiBold,
+                                color = HexTextPrimary
                             )
                             Text(
                                 text = if (isTelegramVerified) strings.telegramConnected else strings.telegramNotConnected,
                                 fontSize = 12.sp,
-                                color = if (isTelegramVerified) Color(0xFF1DB954) else Color(0xFF8B8B9E)
+                                color = if (isTelegramVerified) HexOnlineGreen else HexTextSecondary
                             )
                         }
                         if (!isTelegramVerified) {
@@ -1326,16 +1685,16 @@ fun SettingsScreen(
                                     }
                                 },
                                 shape = RoundedCornerShape(8.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2990D6)),
+                                colors = ButtonDefaults.buttonColors(containerColor = HexShardTeal),
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                             ) {
                                 Text(strings.connectTelegram, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             }
                         } else {
                             Icon(
-                                Icons.Default.Check,
+                                Icons.Default.CheckCircle,
                                 contentDescription = null,
-                                tint = Color(0xFF1DB954),
+                                tint = HexOnlineGreen,
                                 modifier = Modifier.size(20.dp)
                             )
                         }
@@ -1343,40 +1702,42 @@ fun SettingsScreen(
                 }
             }
 
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            // ACCOUNT
-            SettingsGroupHeader(strings.account)
-            Card(
+            // 3. ACCOUNT & SECURITY
+            HexSectionHeader(title = strings.account)
+            HexCard(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                containerColor = HexDarkSurface,
+                borderColor = HexDarkBorder
             ) {
                 Column {
-                    SettingsItem(icon = Icons.Default.Person, title = strings.profile, onClick = { showEditProfile = true })
-                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    SettingsItem(icon = Icons.Default.Person, title = strings.editProfile, onClick = { showEditProfile = true })
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = HexDarkBorderSubtle)
                     SettingsItem(icon = Icons.Default.Wallpaper, title = strings.profileBackground, onClick = { showBgOptionsDialog = true })
-                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                    SettingsItem(icon = Icons.Default.QrCode, title = "My Profile QR Code", onClick = { showQrDialog = true })
-                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                    SettingsItem(icon = Icons.Default.QrCodeScanner, title = "Scan / Import Contact QR", onClick = { showScanQrDialog = true })
-                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = HexDarkBorderSubtle)
+                    SettingsItem(icon = Icons.Default.QrCode, title = strings.myProfileQrCode, onClick = { showQrDialog = true })
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = HexDarkBorderSubtle)
+                    SettingsItem(icon = Icons.Default.QrCodeScanner, title = strings.scanQrTitle, onClick = { showScanQrDialog = true })
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = HexDarkBorderSubtle)
                     SettingsItem(icon = Icons.Default.Lock, title = strings.privacySecurity, onClick = { showPrivacyDialog = true })
-                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = HexDarkBorderSubtle)
                     SettingsItem(icon = Icons.Default.Notifications, title = strings.notifications, onClick = { showNotificationsDialog = true })
-                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = HexDarkBorderSubtle)
                     SettingsItem(icon = Icons.AutoMirrored.Filled.ExitToApp, title = strings.logout, onClick = { showLogoutDialog = true })
-                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                    SettingsItem(icon = Icons.Default.DeleteForever, title = strings.deleteAccount, titleColor = MaterialTheme.colorScheme.error, onClick = { showDeleteDialog = true })
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = HexDarkBorderSubtle)
+                    SettingsItem(icon = Icons.Default.DeleteForever, title = strings.deleteAccount, titleColor = HexDanger, onClick = { showDeleteDialog = true })
                 }
             }
 
-            // APP
-            SettingsGroupHeader(strings.app)
-            Card(
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // 4. APP PREFERENCES
+            HexSectionHeader(title = strings.app)
+            HexCard(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                containerColor = HexDarkSurface,
+                borderColor = HexDarkBorder
             ) {
                 Column {
                     SettingsItem(
@@ -1385,21 +1746,23 @@ fun SettingsScreen(
                         subtitle = if (currentLang == AppLanguage.RUSSIAN) strings.russian else strings.english,
                         onClick = { showLanguage = true }
                     )
-                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = HexDarkBorderSubtle)
                     SettingsItem(icon = Icons.Default.Storage, title = strings.storageData, onClick = { showStorageDialog = true })
                 }
             }
-            
-            // SUPPORT
-            SettingsGroupHeader(strings.support)
-            Card(
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // 5. SUPPORT & HELP
+            HexSectionHeader(title = strings.support)
+            HexCard(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                containerColor = HexDarkSurface,
+                borderColor = HexDarkBorder
             ) {
                 Column {
                     SettingsItem(icon = Icons.Default.HelpOutline, title = strings.helpCenter, onClick = onNavigateToFaq)
-                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = HexDarkBorderSubtle)
                     SettingsItem(icon = Icons.Default.BugReport, title = strings.reportProblem, onClick = {
                         val intent = Intent(Intent.ACTION_SENDTO).apply {
                             data = Uri.parse("mailto:supportventaxiscorp@gmail.com")
@@ -1407,7 +1770,7 @@ fun SettingsScreen(
                         }
                         context.startActivity(Intent.createChooser(intent, "Send Email"))
                     })
-                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = HexDarkBorderSubtle)
                     SettingsItem(icon = Icons.Default.Email, title = strings.contactSupport, onClick = {
                         val intent = Intent(Intent.ACTION_SENDTO).apply {
                             data = Uri.parse("mailto:supportventaxiscorp@gmail.com")
@@ -1416,23 +1779,26 @@ fun SettingsScreen(
                     })
                 }
             }
-            
-            // ABOUT
-            SettingsGroupHeader(strings.about)
-            Card(
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // 6. LEGAL & ABOUT
+            HexSectionHeader(title = strings.about)
+            HexCard(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                containerColor = HexDarkSurface,
+                borderColor = HexDarkBorder
             ) {
                 Column {
                     SettingsItem(icon = Icons.Default.Security, title = strings.privacyPolicy, onClick = onNavigateToPrivacy)
-                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = HexDarkBorderSubtle)
                     SettingsItem(icon = Icons.Default.Gavel, title = strings.termsService, onClick = onNavigateToTerms)
                 }
             }
-            
-            Spacer(modifier = Modifier.height(24.dp))
-            
+
+            Spacer(modifier = Modifier.height(28.dp))
+
+            // Brand Footer
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1442,30 +1808,110 @@ fun SettingsScreen(
                 Text(
                     text = strings.aboutDescription,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 13.sp
+                    color = HexTextSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp
                 )
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(strings.version, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(strings.developer, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(strings.leadDeveloper, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(strings.copyright, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(modifier = Modifier.height(14.dp))
+                Text(strings.version, fontSize = 12.sp, color = HexTextTertiary)
+                Text(strings.developer, fontSize = 12.sp, color = HexTextTertiary)
+                Text(strings.leadDeveloper, fontSize = 12.sp, color = HexTextTertiary)
+                Text(strings.copyright, fontSize = 11.sp, color = HexTextTertiary)
             }
-            
-            Spacer(modifier = Modifier.height(30.dp))
+
+            Spacer(modifier = Modifier.height(36.dp))
+        }
+
+        if (showClaimHexShardDialog) {
+            HexShardIdClaimDialog(
+                onDismiss = { showClaimHexShardDialog = false },
+                onSuccess = { _ ->
+                    showClaimHexShardDialog = false
+                }
+            )
+        }
+    }
+}
+
+@Composable
+fun ProfileInfoRow(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    isAccent: Boolean = false,
+    badge: String? = null,
+    onCopy: (() -> Unit)? = null,
+    onClick: (() -> Unit)? = null
+) {
+    val rowModifier = if (onClick != null) {
+        modifier.fillMaxWidth().hexPressEffect(onClick = onClick)
+    } else {
+        modifier.fillMaxWidth()
+    }
+
+    Row(
+        modifier = rowModifier,
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = label,
+                    fontSize = 11.sp,
+                    color = HexTextSecondary
+                )
+                if (badge != null) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = HexShardTealContainer
+                    ) {
+                        Text(
+                            text = badge,
+                            color = HexShardOnTealContainer,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = value,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                color = if (isAccent) HexShardTealLight else HexTextPrimary,
+                maxLines = 3
+            )
+        }
+        if (onCopy != null) {
+            IconButton(
+                onClick = onCopy,
+                modifier = Modifier.size(32.dp).hexPressEffect()
+            ) {
+                Icon(
+                    Icons.Default.ContentCopy,
+                    contentDescription = null,
+                    tint = HexTextSecondary,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        } else if (onClick != null) {
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowForwardIos,
+                contentDescription = null,
+                tint = HexTextTertiary,
+                modifier = Modifier.size(13.dp)
+            )
         }
     }
 }
 
 @Composable
 fun SettingsGroupHeader(title: String) {
-    Text(
-        text = title,
-        color = MaterialTheme.colorScheme.primary,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 13.sp,
-        modifier = Modifier.padding(start = 16.dp, top = 24.dp, bottom = 8.dp)
-    )
+    HexSectionHeader(title = title)
 }
 
 @Composable
@@ -1479,27 +1925,38 @@ fun SettingsItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onClick() }
+            .hexPressEffect(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = if (titleColor != Color.Unspecified) titleColor else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(24.dp)
+            tint = if (titleColor != Color.Unspecified) titleColor else HexShardTeal,
+            modifier = Modifier.size(22.dp)
         )
-        Spacer(modifier = Modifier.width(24.dp))
-        Column {
+        Spacer(modifier = Modifier.width(18.dp))
+        Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
-                fontSize = 16.sp,
-                color = if (titleColor != Color.Unspecified) titleColor else MaterialTheme.colorScheme.onSurface
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
+                color = if (titleColor != Color.Unspecified) titleColor else HexTextPrimary
             )
             if (subtitle != null) {
-                Text(text = subtitle, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    text = subtitle,
+                    fontSize = 13.sp,
+                    color = HexTextSecondary
+                )
             }
         }
+        Icon(
+            Icons.AutoMirrored.Filled.ArrowForwardIos,
+            contentDescription = null,
+            tint = HexTextTertiary,
+            modifier = Modifier.size(13.dp)
+        )
     }
 }
 

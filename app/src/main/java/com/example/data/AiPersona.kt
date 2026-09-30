@@ -7,11 +7,9 @@ package com.example.data
  */
 enum class AiPersona(val id: String, val displayName: String) {
     VENTAXIS("ventaxis", "Ventaxis AI"),
-    HEXAGON("hexagon", "HexShard AI");
+    HEXAGON("hexagon", "Hexagon AI");
 
     companion object {
-        val DEFAULT = HEXAGON
-
         /**
          * Resolves persona strictly by canonical id ("ventaxis" or "hexagon").
          * Rejects unknown, empty, or loosely matched IDs with IllegalArgumentException.
@@ -25,6 +23,7 @@ enum class AiPersona(val id: String, val displayName: String) {
 
         /**
          * Safely resolves persona or returns null if unknown/invalid.
+         * STRICT: Does not perform silent fallback to any default persona.
          */
         fun fromIdOrNull(id: String?): AiPersona? {
             if (id.isNullOrBlank()) return null

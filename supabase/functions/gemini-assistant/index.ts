@@ -59,12 +59,10 @@ async function getAuthenticatedUser(req: Request) {
 
 const memoryRateLimit = new Map<string, number>();
 
-// Server-authoritative allowed AI models
+// Server-authoritative allowed AI models strictly bound to project contract:
+// Ventaxis AI -> gemini-3.6-flash
+// Hexagon AI  -> gemini-3.5-flash-lite
 const ALLOWED_AI_MODELS = new Set([
-  "gemini-3.5-flash",
-  "gemini-2.5-flash",
-  "gemini-flash-latest",
-  "gemini-3.1-flash-lite-preview",
   "gemini-3.6-flash",
   "gemini-3.5-flash-lite"
 ]);
@@ -202,27 +200,41 @@ serve(async (req: Request) => {
       );
     }
 
-    const rawPersona = String(payload?.persona_id || "ventaxis").toLowerCase().trim();
+    // Strict persona validation: client must send persona_id without silent fallback
+    const rawPersona = payload?.persona_id ?? payload?.persona ?? (payload?.mode === "analytical" ? "ventaxis" : payload?.mode === "fast" ? "hexagon" : null);
+
+    if (!rawPersona || typeof rawPersona !== "string" || !rawPersona.trim()) {
+      return new Response(
+        JSON.stringify({
+          error: "Persona ID is required and must be either 'ventaxis' or 'hexagon'",
+          code: "AI_INVALID_PERSONA",
+          message: "Persona ID is required and must be either 'ventaxis' or 'hexagon'"
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const cleanPersona = rawPersona.toLowerCase().trim();
     let canonicalPersona: "ventaxis" | "hexagon";
     let modelId: string;
     let systemPrompt: string;
     let temperature: number;
 
-    if (rawPersona === "ventaxis") {
+    if (cleanPersona === "ventaxis") {
       canonicalPersona = "ventaxis";
-      modelId = "gemini-3.5-flash";
+      modelId = "gemini-3.6-flash";
       systemPrompt = VENTAXIS_SYSTEM_PROMPT;
       temperature = 0.7;
-    } else if (rawPersona === "hexagon") {
+    } else if (cleanPersona === "hexagon") {
       canonicalPersona = "hexagon";
-      modelId = "gemini-2.5-flash";
+      modelId = "gemini-3.5-flash-lite";
       systemPrompt = HEXAGON_SYSTEM_PROMPT;
       temperature = 0.3;
     } else {
       return new Response(
         JSON.stringify({
           error: `Unknown AI persona: ${rawPersona}`,
-          code: "AI_INVALID_REQUEST",
+          code: "AI_INVALID_PERSONA",
           message: `Unknown AI persona: ${rawPersona}. Allowed personas: ventaxis, hexagon`
         }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }

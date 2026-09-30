@@ -766,7 +766,7 @@ fun ChatArea(
     val isHexagonActive = isAiChat && (selectedAiModel == com.example.network.AiModelOption.HEXAGON)
     val isVentaxisActive = isAiChat && (selectedAiModel == com.example.network.AiModelOption.VENTAXIS)
     val canCallRecipient = canInitiateCall(chat)
-    val displayName = if (isSelfChat) strings.savedMessages else if (isAiChat) "Hexagon AI" else chat.name
+    val displayName = if (isSelfChat) strings.savedMessages else if (isAiChat) (if (isVentaxisActive) "Ventaxis AI" else "Hexagon AI") else chat.name
     val displayAva = if (isSelfChat) (if (isRussian) "ИЗ" else "SM") else if (isAiChat) (if (isHexagonActive) "HX" else "VX") else chat.ava
     val statusText = if (isTyping) {
         strings.typing
@@ -986,7 +986,7 @@ fun ChatArea(
                             modifier = Modifier.padding(vertical = 8.dp, horizontal = 8.dp)
                         ) {
                             Text(
-                                text = "HexShard AI",
+                                text = "Hexagon AI",
                                 color = if (isHexagonActive) Color.White else txtMain,
                                 fontSize = 13.sp,
                                 fontWeight = if (isHexagonActive) FontWeight.Bold else FontWeight.Medium

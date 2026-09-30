@@ -212,7 +212,13 @@ object AiBackupManager {
                 val mObj = msgArray.getJSONObject(i)
                 val idKey = mObj.optString("idempotencyKey").ifBlank { "ai_bk_${System.currentTimeMillis()}_$i" }
                 val rawPersona = mObj.optString("personaId")
-                val persona = com.example.data.AiPersona.fromIdOrNull(rawPersona)?.id ?: com.example.data.AiPersona.VENTAXIS.id
+                val resolved = com.example.data.AiPersona.fromIdOrNull(rawPersona)
+                    ?: when {
+                        mObj.optString("sender").contains("Hexagon", ignoreCase = true) -> com.example.data.AiPersona.HEXAGON
+                        mObj.optString("sender").contains("Ventaxis", ignoreCase = true) -> com.example.data.AiPersona.VENTAXIS
+                        else -> null
+                    }
+                val persona = resolved?.id
 
                 messagesToInsert.add(
                     MessageEntity(

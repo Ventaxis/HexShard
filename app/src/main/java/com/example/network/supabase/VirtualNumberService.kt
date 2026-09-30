@@ -132,13 +132,17 @@ object VirtualNumberService {
 
             if (resp.isSuccessful && body.isNotEmpty()) {
                 val json = JSONObject(body)
-                val rawDigits = json.optString("raw_number", json.optString("number"))
-                val formatted = json.optString("formatted", VirtualNumberGenerator.format8Digits(rawDigits))
+                val rawField = json.optString("raw_number", json.optString("number"))
+                var cleanDigits = rawField.filter { it.isDigit() }
+                if (cleanDigits.length == 11 && cleanDigits.startsWith("999")) {
+                    cleanDigits = cleanDigits.substring(3)
+                }
+                val formatted = json.optString("formatted", VirtualNumberGenerator.format8Digits(cleanDigits))
                 val expiresAt = json.optLong("expires_at", System.currentTimeMillis() + 600_000L)
 
-                if (rawDigits.length == 8 && rawDigits.all { it.isDigit() }) {
+                if (cleanDigits.length == 8) {
                     return@withContext VirtualNumberReservationResult.Success(
-                        raw8Digits = rawDigits,
+                        raw8Digits = cleanDigits,
                         formatted = formatted,
                         expiresAt = expiresAt
                     )
@@ -298,8 +302,11 @@ object VirtualNumberService {
                     val arr = org.json.JSONArray(body)
                     if (arr.length() > 0) {
                         val obj = arr.getJSONObject(0)
-                        val raw = obj.optString("number", obj.optString("raw_number", ""))
-                        val clean = raw.filter { it.isDigit() }
+                        val raw = obj.optString("raw_number", obj.optString("number", ""))
+                        var clean = raw.filter { it.isDigit() }
+                        if (clean.length == 11 && clean.startsWith("999")) {
+                            clean = clean.substring(3)
+                        }
                         if (clean.length == 8) {
                             val formatted = VirtualNumberGenerator.format8Digits(clean)
                             SessionManager.updateVirtualNumber(context, clean)

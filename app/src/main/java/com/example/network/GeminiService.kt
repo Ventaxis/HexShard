@@ -59,7 +59,7 @@ class GeminiService @Inject constructor(
     suspend fun requestAssistant(
         prompt: String,
         history: List<Pair<String, String>> = emptyList(),
-        modelOption: AiModelOption = AiModelOption.DEFAULT
+        modelOption: AiModelOption = AiModelOption.HEXAGON
     ): AiResult = withContext(Dispatchers.IO) {
         val sanitizedPrompt = prompt.trim().take(MAX_PROMPT_LENGTH)
         if (sanitizedPrompt.isBlank()) {
@@ -74,18 +74,14 @@ class GeminiService @Inject constructor(
         }
         lastRequestTimestamp.set(now)
 
-        // All AI requests route through server-side gemini-assistant Edge Function if available,
-        // with instant resilient fallback to ensure the chat never hangs or fails.
+        // All AI requests route strictly through server-side gemini-assistant Edge Function.
+        // Server strictly owns model mapping and system prompts.
         val userToken = SecurePrefsManager.getSupabaseAccessToken(context)
-        if (userToken.isNotBlank()) {
-            val remoteResult = callSupabaseEdgeFunction(sanitizedPrompt, history, modelOption)
-            if (remoteResult is AiResult.Success) {
-                return@withContext remoteResult
-            }
-            Timber.w("Remote AI assistant edge function returned: $remoteResult, activating resilient fallback")
+        if (userToken.isBlank()) {
+            return@withContext AiResult.Unauthorized
         }
 
-        generateFallbackResult(sanitizedPrompt, history, modelOption)
+        callSupabaseEdgeFunction(sanitizedPrompt, history, modelOption)
     }
 
     /**
@@ -203,124 +199,6 @@ class GeminiService @Inject constructor(
         } catch (e: Exception) {
             Timber.e(e, "Unexpected error calling gemini-assistant edge function")
             AiResult.Error("CLIENT_ERROR", e.message ?: "Client processing error")
-        }
-    }
-
-    fun generateFallbackResult(
-        prompt: String,
-        history: List<Pair<String, String>> = emptyList(),
-        modelOption: AiModelOption = AiModelOption.DEFAULT
-    ): AiResult {
-        val reply = generateFallbackReply(prompt, history, modelOption)
-        return AiResult.Success(reply = reply, persona = modelOption.personaId)
-    }
-
-    fun generateFallbackReply(
-        prompt: String,
-        history: List<Pair<String, String>> = emptyList(),
-        modelOption: AiModelOption = AiModelOption.DEFAULT
-    ): String {
-        val lower = prompt.lowercase().trim()
-        val isRussian = lower.any { it in 'а'..'я' || it in 'А'..'Я' } ||
-                com.example.ui.LocalizationManager.currentLanguage.value == com.example.ui.AppLanguage.RUSSIAN
-
-        val isVentaxis = modelOption.persona == com.example.data.AiPersona.VENTAXIS
-
-        return when {
-            // Greetings
-            lower.contains("привет") || lower.contains("здравствуй") || lower.contains("добрый") ||
-            lower == "hi" || lower == "hello" || lower == "hey" || lower.startsWith("hi ") || lower.startsWith("hello ") -> {
-                if (isRussian) {
-                    if (isVentaxis) {
-                        "Здравствуйте! Я Ventaxis AI — интеллектуальный помощник HexShard. Готов помочь с анализом данных, архитектурой, кодом или решением любых задач. О чём бы вы хотели поговорить?"
-                    } else {
-                        "Привет! Я Hexagon AI — быстрый ассистент HexShard. Задавай вопрос или ставь задачу — отвечу чётко и по делу!"
-                    }
-                } else {
-                    if (isVentaxis) {
-                        "Hello! I am Ventaxis AI, your analytical assistant in HexShard. Ready to assist with technical analysis, architecture, coding, or problem-solving. How can I assist you today?"
-                    } else {
-                        "Hi! I'm Hexagon AI, your fast built-in assistant in HexShard. Ask me anything, and I'll give you a concise, direct answer!"
-                    }
-                }
-            }
-
-            // Identity / Who are you
-            lower.contains("кто ты") || lower.contains("как тебя зовут") || lower.contains("who are you") || lower.contains("what are you") -> {
-                if (isRussian) {
-                    if (isVentaxis) {
-                        "Я Ventaxis AI — встроенная нейросетевая модель HexShard Messenger. Мои приоритеты: безопасность, точность формулировок, структурированный анализ и помощь в инженерных вопросах."
-                    } else {
-                        "Я Hexagon AI — высокоскоростной встроенный ассистент в экосистеме HexShard. Я отвечаю кратко, конкретно и без лишних слов."
-                    }
-                } else {
-                    if (isVentaxis) {
-                        "I am Ventaxis AI, a built-in neural assistant in HexShard Messenger. I focus on analytical precision, technical accuracy, privacy, and clear problem solving."
-                    } else {
-                        "I am Hexagon AI, the rapid built-in assistant in HexShard Messenger. I provide fast, direct, and actionable solutions."
-                    }
-                }
-            }
-
-            // HexShard / Messenger features / +999 identity
-            lower.contains("hexshard") || lower.contains("хексшард") || lower.contains("+999") || lower.contains("номер") || lower.contains("номер") || lower.contains("number") -> {
-                if (isRussian) {
-                    "HexShard — это защищённый приватный мессенджер с поддержкой виртуальной идентификации (+999) и сквозного шифрования (E2EE).\n\n" +
-                    "• **Виртуальный номер +999**: уникальная 8-значная цифровая идентичность, привязанная к вашей криптографической сессии без раскрытия реального номера телефона.\n" +
-                    "• **Приватность**: полная изоляция ключей и отсутствие доступа третьих лиц к сообщениям.\n" +
-                    "• **Встроенный ИИ**: Ventaxis (глубокий анализ) и Hexagon (скорость и лаконичность)."
-                } else {
-                    "HexShard is a private, secure messenger featuring virtual identity (+999) and End-to-End Encryption (E2EE).\n\n" +
-                    "• **Virtual Number (+999)**: Unique 8-digit identity linked directly to your secure account without exposing personal phone numbers.\n" +
-                    "• **Privacy**: Complete account isolation, zero data sharing, and cryptographic identity keys.\n" +
-                    "• **Built-in AI**: Ventaxis (deep analytical reasoning) and Hexagon (high-speed pragmatism)."
-                }
-            }
-
-            // Encryption / Security
-            lower.contains("шифрован") || lower.contains("безопасн") || lower.contains("encrypt") || lower.contains("security") -> {
-                if (isRussian) {
-                    "Безопасность в HexShard основана на сквозном шифровании (E2EE) с генерацией криптографических пар ключей (ECDSA/Ed25519) непосредственно на устройстве. Приватные ключи никогда не покидают ваше локальное защищённое хранилище (EncryptedSharedPreferences), а сообщения подписываются цифровой подписью для защиты от подделки."
-                } else {
-                    "Security in HexShard is built on End-to-End Encryption with on-device cryptographic key pairs. Private keys never leave your secure local storage, and messages are digitally signed to guarantee authenticity and prevent tampering."
-                }
-            }
-
-            // Help / Capabilities
-            lower.contains("что ты умеешь") || lower.contains("помощь") || lower.contains("help") || lower.contains("capabilities") -> {
-                if (isRussian) {
-                    "Я могу помочь со следующими задачами:\n" +
-                    "1. **Программирование и код**: Kotlin, Java, Python, SQL, REST API, архитектура ПО.\n" +
-                    "2. **Тексты и переводы**: редактура, перевод, составление документации.\n" +
-                    "3. **Анализ и расчёты**: логические задачи, математика, алгоритмы.\n" +
-                    "4. **Навигация по HexShard**: объяснение функций безопасности, виртуальных номеров и настроек."
-                } else {
-                    "Here is what I can assist you with:\n" +
-                    "1. **Coding & Architecture**: Kotlin, Java, Python, SQL, REST APIs, system design.\n" +
-                    "2. **Content & Writing**: Technical writing, editing, documentation, translations.\n" +
-                    "3. **Analysis & Logic**: Mathematics, algorithmic problem solving, reasoning.\n" +
-                    "4. **HexShard Features**: Security architecture, virtual numbers, and preferences."
-                }
-            }
-
-            // Generic queries
-            else -> {
-                if (isRussian) {
-                    if (isVentaxis) {
-                        "По вашему запросу («$prompt»):\n\n" +
-                        "Внимательно рассмотрел вопрос. Чтобы предоставить наиболее точный и полный ответ, уточните конкретные детали или контекст задачи, если требуется специализированное решение. Чем могу дополнить анализ?"
-                    } else {
-                        "Принято: «$prompt». Задача понятна. Если нужны конкретные шаги реализации или пример кода — напиши детали, разберём мгновенно!"
-                    }
-                } else {
-                    if (isVentaxis) {
-                        "Regarding your inquiry (\"$prompt\"):\n\n" +
-                        "I have processed your request. To provide the most precise and complete solution, please let me know if you would like code examples, architectural breakdown, or step-by-step guidance."
-                    } else {
-                        "Received: \"$prompt\". If you need specific implementation steps, code snippets, or a direct answer, let me know the details!"
-                    }
-                }
-            }
         }
     }
 }

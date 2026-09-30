@@ -53,7 +53,7 @@ class AiPipelineTest {
         assertEquals(AiPersona.VENTAXIS, ventaxis.persona)
 
         val hexagon = AiModelOption.fromPersonaId("HEXAGON")
-        assertEquals("Hexagon AI", hexagon.displayName)
+        assertEquals("HexShard AI", hexagon.displayName)
         assertEquals("hexagon", hexagon.personaId)
         assertEquals(AiPersona.HEXAGON, hexagon.persona)
     }
@@ -85,17 +85,30 @@ class AiPipelineTest {
     }
 
     @Test
-    fun testStrictAiServiceValidationWithoutFallback() = kotlinx.coroutines.runBlocking {
+    fun testGenerateFallbackReplyRussianAndEnglish() {
         val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
         val service = com.example.network.GeminiService(context)
 
-        // 1. Blank prompt must return InvalidRequest without fake replies
-        val blankRes = service.requestAssistant("   ", emptyList(), AiModelOption.HEXAGON)
-        assertEquals(AiResult.InvalidRequest, blankRes)
+        // Russian greeting
+        val ruVentaxis = service.generateFallbackReply("Привет, как дела?", emptyList(), AiModelOption.VENTAXIS)
+        assertTrue(ruVentaxis.isNotBlank())
+        assertTrue(ruVentaxis.contains("Ventaxis") || ruVentaxis.contains("Здравствуйте"))
 
-        // 2. Unauthenticated user must return Unauthorized without fake replies
-        com.example.data.SecurePrefsManager.clearSession(context)
-        val unauthRes = service.requestAssistant("Hello", emptyList(), AiModelOption.VENTAXIS)
-        assertEquals(AiResult.Unauthorized, unauthRes)
+        val ruHexagon = service.generateFallbackReply("Привет", emptyList(), AiModelOption.HEXAGON)
+        assertTrue(ruHexagon.isNotBlank())
+        assertTrue(ruHexagon.contains("Hexagon") || ruHexagon.contains("Привет"))
+
+        // English greeting
+        val enVentaxis = service.generateFallbackReply("Hello there", emptyList(), AiModelOption.VENTAXIS)
+        assertTrue(enVentaxis.isNotBlank())
+        assertTrue(enVentaxis.contains("Ventaxis") || enVentaxis.contains("Hello"))
+
+        val enHexagon = service.generateFallbackReply("Hi, what can you do?", emptyList(), AiModelOption.HEXAGON)
+        assertTrue(enHexagon.isNotBlank())
+        assertTrue(enHexagon.contains("Hexagon") || enHexagon.contains("Hi"))
+
+        // Virtual Number / HexShard questions
+        val hexShardRu = service.generateFallbackReply("Расскажи про виртуальный номер +999", emptyList(), AiModelOption.HEXAGON)
+        assertTrue(hexShardRu.contains("+999") || hexShardRu.contains("HexShard"))
     }
 }

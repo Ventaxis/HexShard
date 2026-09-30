@@ -42,9 +42,81 @@ object VirtualNumberService {
     }
 
     /**
+     * Checks if response body or HTTP status indicates a PostgREST schema cache miss
+     * or function signature mismatch (e.g. PGRST202).
+     */
+    private fun isSchemaCacheError(body: String, code: Int): Boolean {
+        if (code == 404) return true
+        val lower = body.lowercase()
+        return lower.contains("schema cache") ||
+                lower.contains("could not find the function") ||
+                lower.contains("pgrst202") ||
+                lower.contains("searched for the function")
+    }
+
+    /**
+     * Ensures that technical database internals (schema cache, PGRST202, SQL syntax, etc.)
+     * are never displayed raw to the user.
+     */
+    private fun sanitizeErrorMessage(rawMessage: String, fallback: String): String {
+        if (rawMessage.isBlank()) return fallback
+        val lower = rawMessage.lowercase()
+        if (lower.contains("schema cache") ||
+            lower.contains("could not find the function") ||
+            lower.contains("pgrst") ||
+            lower.contains("searched for the function") ||
+            lower.contains("function public.") ||
+            lower.contains("structure of") ||
+            lower.contains("relation") ||
+            (lower.contains("column") && lower.contains("does not exist")) ||
+            lower.contains("sql") ||
+            lower.contains("syntax error") ||
+            lower.contains("fatal:") ||
+            lower.contains("exception")
+        ) {
+            return fallback
+        }
+        return rawMessage
+    }
+
+    private fun parseErrorMessage(responseBody: String, fallback: String): String {
+        return try {
+            val json = JSONObject(responseBody)
+            val extracted = json.optString("error", json.optString("message", json.optString("details", fallback)))
+            sanitizeErrorMessage(extracted, fallback)
+        } catch (_: Exception) {
+            sanitizeErrorMessage(responseBody, fallback)
+        }
+    }
+
+    private fun parseReservationJson(body: String): VirtualNumberReservationResult.Success? {
+        return try {
+            val json = JSONObject(body)
+            val rawField = json.optString("raw_number", json.optString("number", json.optString("raw8Digits", json.optString("hex_number", ""))))
+            var cleanDigits = rawField.filter { it.isDigit() }
+            if (cleanDigits.length == 11 && cleanDigits.startsWith("999")) {
+                cleanDigits = cleanDigits.substring(3)
+            }
+            if (cleanDigits.length == 8) {
+                val formatted = json.optString("formatted", VirtualNumberGenerator.format8Digits(cleanDigits))
+                val expiresAt = json.optLong("expires_at", System.currentTimeMillis() + 600_000L)
+                VirtualNumberReservationResult.Success(
+                    raw8Digits = cleanDigits,
+                    formatted = formatted,
+                    expiresAt = expiresAt
+                )
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
      * Atomically reserves a +999 identity number via Supabase Edge Function or RPC.
-     * STRICT NO-FALLBACK: A network or server error returns Error immediately.
-     * No local numbers are ever generated or assumed available on the client.
+     * Schema-cache resilient: never sends empty JSON when overloads expect named parameters,
+     * tries payload variants, and falls through gracefully without exposing internal database errors.
      */
     suspend fun reserveCandidateNumber(
         userId: String,
@@ -62,7 +134,13 @@ object VirtualNumberService {
         // 1. Try Edge Function /functions/v1/reserve-virtual-number
         try {
             val edgePayload = JSONObject().apply {
-                if (!preferred.isNullOrBlank()) put("preferred", preferred)
+                if (!preferred.isNullOrBlank()) {
+                    put("preferred", preferred.trim())
+                    put("p_preferred", preferred.trim())
+                } else {
+                    put("preferred", JSONObject.NULL)
+                    put("p_preferred", JSONObject.NULL)
+                }
             }
             val edgeReq = Request.Builder()
                 .url("$baseUrl/functions/v1/reserve-virtual-number")
@@ -76,86 +154,79 @@ object VirtualNumberService {
             val edgeBody = edgeResp.body?.string() ?: ""
 
             if (edgeResp.isSuccessful && edgeBody.isNotEmpty()) {
-                val json = JSONObject(edgeBody)
-                val rawDigits = json.optString("raw_number", json.optString("number"))
-                val formatted = json.optString("formatted", VirtualNumberGenerator.format8Digits(rawDigits))
-                val expiresAt = json.optLong("expires_at", System.currentTimeMillis() + 600_000L)
-
-                if (rawDigits.length == 8 && rawDigits.all { it.isDigit() }) {
-                    return@withContext VirtualNumberReservationResult.Success(
-                        raw8Digits = rawDigits,
-                        formatted = formatted,
-                        expiresAt = expiresAt
-                    )
+                val parsed = parseReservationJson(edgeBody)
+                if (parsed != null) {
+                    return@withContext parsed
                 }
             } else if (edgeResp.code == 409 || edgeResp.code == 429) {
+                Timber.w("reserve-virtual-number Edge Function returned business error ${edgeResp.code}: $edgeBody")
                 val err = parseErrorMessage(edgeBody, "No virtual numbers currently available")
                 return@withContext VirtualNumberReservationResult.Error(err)
+            } else {
+                Timber.w("reserve-virtual-number Edge Function failed with HTTP ${edgeResp.code}: $edgeBody; attempting schema-resilient RPC")
             }
         } catch (e: Exception) {
-            Timber.d("reserve-virtual-number Edge Function call failed: ${e.message}")
+            Timber.w(e, "reserve-virtual-number Edge Function call failed; attempting RPC fallback")
         }
 
-        // 2. Fallback to atomic RPC reserve_hex_number
+        // 2. Schema-resilient fallback to atomic RPC reserve_hex_number
         try {
             // PostgREST maps JSON fields to named parameters.
-            // If preferred is empty, send empty JSON {} so PostgreSQL DEFAULT NULL is triggered.
-            val rpcPayload = JSONObject().apply {
-                if (!preferred.isNullOrBlank()) {
-                    put("p_preferred", preferred.trim())
-                }
+            // Prepare payload sequence to handle both p_preferred, preferred, explicit NULL, and zero-arg fallback
+            val payloadVariants = mutableListOf<JSONObject>()
+            if (!preferred.isNullOrBlank()) {
+                payloadVariants.add(JSONObject().apply { put("p_preferred", preferred.trim()) })
+                payloadVariants.add(JSONObject().apply { put("preferred", preferred.trim()) })
+                payloadVariants.add(JSONObject().apply { put("p_preferred", JSONObject.NULL) })
+                payloadVariants.add(JSONObject())
+            } else {
+                payloadVariants.add(JSONObject().apply { put("p_preferred", JSONObject.NULL) })
+                payloadVariants.add(JSONObject().apply { put("preferred", JSONObject.NULL) })
+                payloadVariants.add(JSONObject())
             }
-            val rpcReq = Request.Builder()
-                .url("$baseUrl/rest/v1/rpc/reserve_hex_number")
-                .header("apikey", anonKey)
-                .header("Authorization", "Bearer $accessToken")
-                .header("Content-Type", "application/json")
-                .post(rpcPayload.toString().toRequestBody(JSON_MEDIA))
-                .build()
 
-            var resp = httpClient.newCall(rpcReq).execute()
-            var body = resp.body?.string() ?: ""
+            var lastCode = 0
+            var lastBody = ""
 
-            // Fallback attempt: if parameterized call failed with 404 / schema cache error, try parameterless call {}
-            if ((resp.code == 404 || body.contains("schema cache") || body.contains("Could not find the function")) && rpcPayload.length() > 0) {
-                Timber.w("Parameterized RPC failed with schema mismatch ($body), attempting parameterless reserve_hex_number()")
-                val fallbackReq = Request.Builder()
+            for (rpcPayload in payloadVariants) {
+                val rpcReq = Request.Builder()
                     .url("$baseUrl/rest/v1/rpc/reserve_hex_number")
                     .header("apikey", anonKey)
                     .header("Authorization", "Bearer $accessToken")
                     .header("Content-Type", "application/json")
-                    .post("{}".toRequestBody(JSON_MEDIA))
+                    .post(rpcPayload.toString().toRequestBody(JSON_MEDIA))
                     .build()
-                resp = httpClient.newCall(fallbackReq).execute()
-                body = resp.body?.string() ?: ""
-            }
 
-            if (resp.isSuccessful && body.isNotEmpty()) {
-                val json = JSONObject(body)
-                val rawField = json.optString("raw_number", json.optString("number"))
-                var cleanDigits = rawField.filter { it.isDigit() }
-                if (cleanDigits.length == 11 && cleanDigits.startsWith("999")) {
-                    cleanDigits = cleanDigits.substring(3)
+                val resp = httpClient.newCall(rpcReq).execute()
+                val body = resp.body?.string() ?: ""
+                lastCode = resp.code
+                lastBody = body
+
+                if (resp.isSuccessful && body.isNotEmpty()) {
+                    val parsed = parseReservationJson(body)
+                    if (parsed != null) {
+                        return@withContext parsed
+                    }
                 }
-                val formatted = json.optString("formatted", VirtualNumberGenerator.format8Digits(cleanDigits))
-                val expiresAt = json.optLong("expires_at", System.currentTimeMillis() + 600_000L)
 
-                if (cleanDigits.length == 8) {
-                    return@withContext VirtualNumberReservationResult.Success(
-                        raw8Digits = cleanDigits,
-                        formatted = formatted,
-                        expiresAt = expiresAt
-                    )
+                // Business error: do NOT retry, no free numbers or rate limit
+                if (resp.code == 409 || resp.code == 429) {
+                    val err = parseErrorMessage(body, "No virtual numbers currently available")
+                    return@withContext VirtualNumberReservationResult.Error(err)
+                }
+
+                if (isSchemaCacheError(body, resp.code)) {
+                    Timber.w("RPC reserve_hex_number schema cache miss with payload $rpcPayload (HTTP ${resp.code}: $body), trying next variant...")
+                    continue
+                } else {
+                    Timber.w("RPC reserve_hex_number failed with HTTP ${resp.code}: $body")
+                    break
                 }
             }
 
-            if (resp.code == 409 || resp.code == 429) {
-                val err = parseErrorMessage(body, "No virtual numbers currently available")
-                return@withContext VirtualNumberReservationResult.Error(err)
-            }
-
-            Timber.w("RPC reserve_hex_number returned code ${resp.code}: $body")
-            return@withContext VirtualNumberReservationResult.Error(parseErrorMessage(body, "Server reservation failed"))
+            val friendlyFallback = "В данный момент не удалось зарезервировать номер. Попробуйте позже."
+            val err = parseErrorMessage(lastBody, friendlyFallback)
+            return@withContext VirtualNumberReservationResult.Error(err)
         } catch (e: Exception) {
             Timber.e(e, "RPC reserve_hex_number network failure")
             return@withContext VirtualNumberReservationResult.Error("Network error during number reservation: ${e.message}")
@@ -184,7 +255,10 @@ object VirtualNumberService {
         raw8Digits: String,
         context: Context
     ): VirtualNumberConfirmationResult = withContext(Dispatchers.IO) {
-        val cleanDigits = raw8Digits.filter { it.isDigit() }
+        var cleanDigits = raw8Digits.filter { it.isDigit() }
+        if (cleanDigits.length == 11 && cleanDigits.startsWith("999")) {
+            cleanDigits = cleanDigits.substring(3)
+        }
         if (cleanDigits.length != 8) {
             return@withContext VirtualNumberConfirmationResult.Error("Number must contain exactly 8 digits")
         }
@@ -197,6 +271,7 @@ object VirtualNumberService {
         try {
             val edgePayload = JSONObject().apply {
                 put("raw_number", cleanDigits)
+                put("p_raw_number", cleanDigits)
             }
             val edgeReq = Request.Builder()
                 .url("$baseUrl/functions/v1/confirm-virtual-number")
@@ -211,55 +286,79 @@ object VirtualNumberService {
 
             if (edgeResp.isSuccessful && edgeBody.isNotEmpty()) {
                 val json = JSONObject(edgeBody)
-                val confirmed = json.optBoolean("confirmed", true)
+                val confirmed = json.optBoolean("confirmed", json.optBoolean("success", true))
                 if (confirmed) {
                     val serverFormatted = json.optString("formatted", formatted)
                     SessionManager.updateVirtualNumber(context, cleanDigits)
+                    SecurePrefsManager.setPrivateVirtualNumber(context, cleanDigits, userId)
                     return@withContext VirtualNumberConfirmationResult.Success(cleanDigits, serverFormatted)
                 }
-            } else if (edgeResp.code == 400 || edgeResp.code == 403 || edgeResp.code == 409) {
-                return@withContext VirtualNumberConfirmationResult.Error(
-                    parseErrorMessage(edgeBody, "Server rejected number confirmation")
-                )
+            } else if (edgeResp.code == 409 || edgeResp.code == 400 || edgeResp.code == 403) {
+                Timber.w("confirm-virtual-number Edge Function returned HTTP ${edgeResp.code}: $edgeBody")
+            } else {
+                Timber.w("confirm-virtual-number Edge Function returned HTTP ${edgeResp.code}: $edgeBody; attempting RPC fallback")
             }
         } catch (e: Exception) {
-            Timber.d("confirm-virtual-number Edge Function call failed: ${e.message}")
+            Timber.w(e, "confirm-virtual-number Edge Function call failed; attempting RPC fallback")
         }
 
-        // 2. Authoritative atomic RPC confirm_hex_number
+        // 2. Authoritative atomic RPC confirm_hex_number with schema-cache resilience
         try {
-            val rpcPayload = JSONObject().apply {
-                put("p_raw_number", cleanDigits)
-            }
-            val rpcReq = Request.Builder()
-                .url("$baseUrl/rest/v1/rpc/confirm_hex_number")
-                .header("apikey", anonKey)
-                .header("Authorization", "Bearer $accessToken")
-                .header("Content-Type", "application/json")
-                .post(rpcPayload.toString().toRequestBody(JSON_MEDIA))
-                .build()
+            val payloadVariants = listOf(
+                JSONObject().apply { put("p_raw_number", cleanDigits) },
+                JSONObject().apply { put("raw_number", cleanDigits) },
+                JSONObject().apply { put("p_number", cleanDigits) },
+                JSONObject().apply { put("number", cleanDigits) }
+            )
 
-            val rpcResp = httpClient.newCall(rpcReq).execute()
-            val rpcBody = rpcResp.body?.string() ?: ""
+            var lastCode = 0
+            var lastBody = ""
 
-            if (rpcResp.isSuccessful && rpcBody.isNotEmpty()) {
-                val json = JSONObject(rpcBody)
-                val confirmed = json.optBoolean("confirmed", true)
-                if (confirmed) {
-                    val serverFormatted = json.optString("formatted", formatted)
-                    SessionManager.updateVirtualNumber(context, cleanDigits)
-                    return@withContext VirtualNumberConfirmationResult.Success(cleanDigits, serverFormatted)
+            for (rpcPayload in payloadVariants) {
+                val rpcReq = Request.Builder()
+                    .url("$baseUrl/rest/v1/rpc/confirm_hex_number")
+                    .header("apikey", anonKey)
+                    .header("Authorization", "Bearer $accessToken")
+                    .header("Content-Type", "application/json")
+                    .post(rpcPayload.toString().toRequestBody(JSON_MEDIA))
+                    .build()
+
+                val rpcResp = httpClient.newCall(rpcReq).execute()
+                val rpcBody = rpcResp.body?.string() ?: ""
+                lastCode = rpcResp.code
+                lastBody = rpcBody
+
+                if (rpcResp.isSuccessful && rpcBody.isNotEmpty()) {
+                    val json = JSONObject(rpcBody)
+                    val confirmed = json.optBoolean("confirmed", json.optBoolean("success", true))
+                    if (confirmed) {
+                        val serverFormatted = json.optString("formatted", formatted)
+                        SessionManager.updateVirtualNumber(context, cleanDigits)
+                        SecurePrefsManager.setPrivateVirtualNumber(context, cleanDigits, userId)
+                        return@withContext VirtualNumberConfirmationResult.Success(cleanDigits, serverFormatted)
+                    }
                 }
-            } else {
-                val err = parseErrorMessage(rpcBody, "Number confirmation failed on server")
-                return@withContext VirtualNumberConfirmationResult.Error(err)
+
+                if (rpcResp.code == 409) {
+                    val err = parseErrorMessage(rpcBody, "Number has already been taken or expired")
+                    return@withContext VirtualNumberConfirmationResult.Error(err)
+                }
+
+                if (isSchemaCacheError(rpcBody, rpcResp.code)) {
+                    Timber.w("RPC confirm_hex_number schema mismatch on payload $rpcPayload, trying next variant...")
+                    continue
+                } else {
+                    break
+                }
             }
+
+            val friendlyFallback = "Не удалось подтвердить номер на сервере. Попробуйте снова."
+            val err = parseErrorMessage(lastBody, friendlyFallback)
+            return@withContext VirtualNumberConfirmationResult.Error(err)
         } catch (e: Exception) {
             Timber.e(e, "RPC confirm_hex_number failure")
             return@withContext VirtualNumberConfirmationResult.Error("Network error during number confirmation: ${e.message}")
         }
-
-        VirtualNumberConfirmationResult.Error("Failed to confirm number on server")
     }
 
     /**
@@ -279,10 +378,11 @@ object VirtualNumberService {
         val baseUrl = SupabaseConfig.getBaseUrl()
         val anonKey = SupabaseConfig.getAnonKey(context)
 
-        // Try querying by account_id first (production schema), then owner_id (v11 schema)
+        // Try querying by account_id first (production schema), then owner_id, then user_id
         val candidateUrls = listOf(
             "$baseUrl/rest/v1/hex_numbers?account_id=eq.$accountId&status=eq.active&select=*&limit=1",
-            "$baseUrl/rest/v1/hex_numbers?owner_id=eq.$accountId&status=eq.active&select=*&limit=1"
+            "$baseUrl/rest/v1/hex_numbers?owner_id=eq.$accountId&status=eq.active&select=*&limit=1",
+            "$baseUrl/rest/v1/hex_numbers?user_id=eq.$accountId&status=eq.active&select=*&limit=1"
         )
 
         var lastError: String? = null
@@ -318,10 +418,10 @@ object VirtualNumberService {
                     return@withContext ActiveVirtualNumberState.NoActiveNumber
                 } else if (resp.code == 400 && body.contains("does not exist")) {
                     // Column name mismatch between schemas, try fallback url
-                    lastError = "Column mismatch: $body"
+                    lastError = "Column mismatch"
                     continue
                 } else {
-                    lastError = "Server HTTP ${resp.code}: $body"
+                    lastError = "Server HTTP ${resp.code}"
                 }
             } catch (e: Exception) {
                 Timber.w(e, "Error loading active virtual number from $url")
@@ -329,7 +429,8 @@ object VirtualNumberService {
             }
         }
 
-        ActiveVirtualNumberState.TemporaryError(lastError ?: "Failed to query active virtual number")
+        val friendlyError = sanitizeErrorMessage(lastError ?: "Failed to query active virtual number", "Не удалось загрузить активный номер")
+        ActiveVirtualNumberState.TemporaryError(friendlyError)
     }
 
     /**
@@ -346,15 +447,6 @@ object VirtualNumberService {
             is ActiveVirtualNumberState.Active -> res.formatted
             is ActiveVirtualNumberState.NoActiveNumber -> null
             is ActiveVirtualNumberState.TemporaryError -> null
-        }
-    }
-
-    private fun parseErrorMessage(responseBody: String, fallback: String): String {
-        return try {
-            val json = JSONObject(responseBody)
-            json.optString("error", json.optString("message", fallback))
-        } catch (_: Exception) {
-            fallback
         }
     }
 }

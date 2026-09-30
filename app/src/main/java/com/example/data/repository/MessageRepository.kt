@@ -308,11 +308,11 @@ class MessageRepository(
             return@withContext false
         }
 
-        // STRICT SERVER AUTHORITY: Call atomic send_message_idempotent RPC.
+        // STRICT SERVER AUTHORITY: Call atomic send_message_idempotent RPC with schema-cache resilience.
         // No direct table insertion fallback is permitted because sequence allocation,
         // membership enforcement, and idempotency checks are server-side invariants.
         try {
-            val rpcPayload = JSONObject().apply {
+            val primaryPayload = JSONObject().apply {
                 put("p_conversation_id", conversationId)
                 put("p_client_message_id", idempotencyKey)
                 put("p_payload", payloadBase64)
@@ -328,21 +328,58 @@ class MessageRepository(
                 put("p_time_str", timeStr)
                 put("p_encryption_version", 2)
             }
+
             val rpcReq = Request.Builder()
                 .url("$baseUrl/rest/v1/rpc/send_message_idempotent")
                 .header("apikey", anonKey)
                 .header("Authorization", "Bearer $accessToken")
                 .header("Content-Type", "application/json")
-                .post(rpcPayload.toString().toRequestBody(JSON_MEDIA))
+                .post(primaryPayload.toString().toRequestBody(JSON_MEDIA))
                 .build()
 
-            val rpcResp = httpClient.newCall(rpcReq).execute()
-            val isSuccess = rpcResp.isSuccessful
-            if (!isSuccess) {
-                val errorBody = rpcResp.body?.string() ?: ""
+            var rpcResp = httpClient.newCall(rpcReq).execute()
+            var isSuccess = rpcResp.isSuccessful
+            var errorBody = if (!isSuccess) rpcResp.body?.string() ?: "" else ""
+            rpcResp.close()
+
+            // If schema cache mismatch, try non-prefixed parameter names
+            if (!isSuccess && (rpcResp.code == 404 || errorBody.contains("schema cache") || errorBody.contains("Could not find the function") || errorBody.contains("PGRST202"))) {
+                Timber.w("send_message_idempotent schema mismatch, trying fallback payload without p_ prefix")
+                val fallbackPayload = JSONObject().apply {
+                    put("conversation_id", conversationId)
+                    put("client_message_id", idempotencyKey)
+                    put("payload", payloadBase64)
+                    put("signature", signatureBase64)
+                    if (isSelfConversation(recipientId)) {
+                        put("recipient_id", senderId)
+                    } else if (recipientId.isNotBlank() && !isAiConversation(recipientId)) {
+                        put("recipient_id", recipientId)
+                    } else {
+                        put("recipient_id", JSONObject.NULL)
+                    }
+                    put("type", type)
+                    put("time_str", timeStr)
+                    put("encryption_version", 2)
+                }
+                val fallbackReq = Request.Builder()
+                    .url("$baseUrl/rest/v1/rpc/send_message_idempotent")
+                    .header("apikey", anonKey)
+                    .header("Authorization", "Bearer $accessToken")
+                    .header("Content-Type", "application/json")
+                    .post(fallbackPayload.toString().toRequestBody(JSON_MEDIA))
+                    .build()
+
+                rpcResp = httpClient.newCall(fallbackReq).execute()
+                isSuccess = rpcResp.isSuccessful
+                if (!isSuccess) {
+                    errorBody = rpcResp.body?.string() ?: ""
+                    Timber.w("send_message_idempotent fallback RPC failed with HTTP ${rpcResp.code}: $errorBody")
+                }
+                rpcResp.close()
+            } else if (!isSuccess) {
                 Timber.w("send_message_idempotent RPC failed with HTTP ${rpcResp.code}: $errorBody")
             }
-            rpcResp.close()
+
             isSuccess
         } catch (e: Exception) {
             Timber.e(e, "send_message_idempotent RPC network failure")

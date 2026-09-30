@@ -766,7 +766,7 @@ fun ChatArea(
     val isHexagonActive = isAiChat && (selectedAiModel == com.example.network.AiModelOption.HEXAGON)
     val isVentaxisActive = isAiChat && (selectedAiModel == com.example.network.AiModelOption.VENTAXIS)
     val canCallRecipient = canInitiateCall(chat)
-    val displayName = if (isSelfChat) strings.savedMessages else if (isAiChat) (if (isVentaxisActive) "Ventaxis AI" else "Hexagon AI") else chat.name
+    val displayName = if (isSelfChat) strings.savedMessages else if (isAiChat) "Hexagon AI" else chat.name
     val displayAva = if (isSelfChat) (if (isRussian) "ИЗ" else "SM") else if (isAiChat) (if (isHexagonActive) "HX" else "VX") else chat.ava
     val statusText = if (isTyping) {
         strings.typing
@@ -986,7 +986,7 @@ fun ChatArea(
                             modifier = Modifier.padding(vertical = 8.dp, horizontal = 8.dp)
                         ) {
                             Text(
-                                text = "Hexagon AI",
+                                text = "HexShard AI",
                                 color = if (isHexagonActive) Color.White else txtMain,
                                 fontSize = 13.sp,
                                 fontWeight = if (isHexagonActive) FontWeight.Bold else FontWeight.Medium
@@ -1985,24 +1985,25 @@ fun InputBarLayout(
                             )
                         }
                     } else if (previewLocation != null) {
-                        val loc = previewLocation!!
-                        Text(
-                            text = if (strings == RussianStrings)
-                                "Координаты: ${String.format(java.util.Locale.US, "%.5f, %.5f", loc.latitude, loc.longitude)}\nТочность: ±${String.format(java.util.Locale.US, "%.0fм", loc.accuracy)}"
-                            else
-                                "Coordinates: ${String.format(java.util.Locale.US, "%.5f, %.5f", loc.latitude, loc.longitude)}\nAccuracy: ±${String.format(java.util.Locale.US, "%.0fm", loc.accuracy)}",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = if (strings == RussianStrings)
-                                "Геопозиция будет зашифрована сквозным шифрованием (E2E) и отправлена только участникам этого чата."
-                            else
-                                "Location data will be end-to-end encrypted and visible only to participants of this chat.",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        previewLocation?.let { loc ->
+                            Text(
+                                text = if (strings == RussianStrings)
+                                    "Координаты: ${String.format(java.util.Locale.US, "%.5f, %.5f", loc.latitude, loc.longitude)}\nТочность: ±${String.format(java.util.Locale.US, "%.0fм", loc.accuracy)}"
+                                else
+                                    "Coordinates: ${String.format(java.util.Locale.US, "%.5f, %.5f", loc.latitude, loc.longitude)}\nAccuracy: ±${String.format(java.util.Locale.US, "%.0fm", loc.accuracy)}",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = if (strings == RussianStrings)
+                                    "Геопозиция будет зашифрована сквозным шифрованием (E2E) и отправлена только участникам этого чата."
+                                else
+                                    "Location data will be end-to-end encrypted and visible only to participants of this chat.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     } else {
                         Text(
                             text = if (strings == RussianStrings)
@@ -2457,11 +2458,12 @@ fun MediaPayload(
                         .size(48.dp)
                         .background(Color.Black.copy(alpha = 0.5f), CircleShape)
                         .clickable {
+                            val file = mediaFile ?: return@clickable
                             try {
                                 val uri = androidx.core.content.FileProvider.getUriForFile(
                                     context,
                                     "${context.packageName}.provider",
-                                    mediaFile!!
+                                    file
                                 )
                                 val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
                                     setDataAndType(uri, "video/*")

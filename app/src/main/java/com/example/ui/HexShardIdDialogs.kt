@@ -301,7 +301,7 @@ fun HexShardIdClaimDialog(
                         )
                         Spacer(modifier = Modifier.height(14.dp))
                         Text(
-                            text = "Подбор уникального номера...",
+                            text = if (strings == RussianStrings) "Подбор уникального номера..." else "Selecting unique number...",
                             style = MaterialTheme.typography.bodyMedium,
                             color = HexTextSecondary
                         )
@@ -367,17 +367,17 @@ fun HexShardIdClaimDialog(
                             )
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "Зарезервировано на сервере",
+                                text = if (strings == RussianStrings) "Зарезервировано на сервере" else "Reserved on server",
                                 fontSize = 11.sp,
                                 color = HexShardTealLight
                             )
                         }
                     }
 
-                    if (errorMessage != null) {
+                    errorMessage?.let { msg ->
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = errorMessage ?: "",
+                            text = msg,
                             color = HexDanger,
                             style = MaterialTheme.typography.bodySmall,
                             textAlign = TextAlign.Center,

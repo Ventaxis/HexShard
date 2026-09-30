@@ -608,10 +608,10 @@ fun AuthScreen(onAuthComplete: () -> Unit) {
                             }
 
                             // Error text
-                            if (errorMessage != null) {
+                            errorMessage?.let { msg ->
                                 Spacer(modifier = Modifier.height(12.dp))
                                 Text(
-                                    text = errorMessage!!,
+                                    text = msg,
                                     color = Color(0xFFFF5252),
                                     fontSize = 13.sp,
                                     modifier = Modifier.fillMaxWidth()
@@ -912,10 +912,10 @@ fun AuthScreen(onAuthComplete: () -> Unit) {
                                 }
                             }
 
-                            if (errorMessage != null) {
+                            errorMessage?.let { msg ->
                                 Spacer(modifier = Modifier.height(12.dp))
                                 Text(
-                                    text = errorMessage!!,
+                                    text = msg,
                                     color = Color(0xFFFF5252),
                                     fontSize = 13.sp,
                                     modifier = Modifier.fillMaxWidth()
@@ -1104,10 +1104,10 @@ fun AuthScreen(onAuthComplete: () -> Unit) {
                                 )
                             }
 
-                            if (errorMessage != null) {
+                            errorMessage?.let { msg ->
                                 Spacer(modifier = Modifier.height(12.dp))
                                 Text(
-                                    text = errorMessage!!,
+                                    text = msg,
                                     color = Color(0xFFFF5252),
                                     fontSize = 13.sp,
                                     modifier = Modifier.fillMaxWidth()

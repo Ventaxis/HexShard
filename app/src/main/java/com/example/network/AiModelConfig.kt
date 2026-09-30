@@ -15,15 +15,15 @@ enum class AiModelOption(
 ) {
     HEXAGON(
         persona = AiPersona.HEXAGON,
-        shortName = "Hexagon",
+        shortName = "HexShard",
         badge = "FAST",
-        description = "Fast mode"
+        description = "Fast assistant"
     ),
     VENTAXIS(
         persona = AiPersona.VENTAXIS,
         shortName = "Ventaxis",
         badge = "PRO",
-        description = "Analytical mode"
+        description = "Smart assistant"
     );
 
     val personaId: String get() = persona.id
@@ -34,18 +34,12 @@ enum class AiModelOption(
 
         fun fromPersonaId(id: String?): AiModelOption {
             val p = AiPersona.fromId(id)
-            return when (p) {
-                AiPersona.HEXAGON -> HEXAGON
-                AiPersona.VENTAXIS -> VENTAXIS
-            }
+            return if (p == AiPersona.HEXAGON) HEXAGON else VENTAXIS
         }
 
         fun fromPersonaIdOrNull(id: String?): AiModelOption? {
             val p = AiPersona.fromIdOrNull(id) ?: return null
-            return when (p) {
-                AiPersona.HEXAGON -> HEXAGON
-                AiPersona.VENTAXIS -> VENTAXIS
-            }
+            return if (p == AiPersona.HEXAGON) HEXAGON else VENTAXIS
         }
     }
 }

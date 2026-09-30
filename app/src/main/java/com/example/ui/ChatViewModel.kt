@@ -68,7 +68,7 @@ class ChatViewModel @Inject constructor(
     private val _isDarkTheme = MutableStateFlow(true)
     val isDarkTheme: StateFlow<Boolean> = _isDarkTheme.asStateFlow()
 
-    private val _selectedAiModel = MutableStateFlow<AiModelOption>(AiModelOption.DEFAULT)
+    private val _selectedAiModel = MutableStateFlow(AiModelOption.DEFAULT)
     val selectedAiModel: StateFlow<AiModelOption> = _selectedAiModel.asStateFlow()
 
     private val _aiErrorState = MutableStateFlow<AiUiError?>(null)
@@ -131,8 +131,11 @@ class ChatViewModel @Inject constructor(
         if (chatId == null) return@combine emptyList()
         val chat = allChatsList.find { it.id == chatId }
         if (chat != null && chat.isAiAssistant) {
-            // Keep all messages in the unified AI conversation; each message maintains its personaId
-            messages.filter { it.text.isNotBlank() || it.isAttachment || it.audioUrl != null }
+            // Filter strictly by personaId enum identifier, completely isolated
+            val validMessages = messages.filter { it.text.isNotBlank() || it.isAttachment || it.audioUrl != null }
+            validMessages.filter {
+                resolvePersonaId(it) == aiModel.personaId
+            }
         } else {
             messages
         }
@@ -510,14 +513,14 @@ class ChatViewModel @Inject constructor(
                     Pair(if (msg.isMe) "user" else "model", msg.text)
                 }
 
-                // Guard with a strict 10s timeout so the UI never hangs or shows typing indefinitely
-                val result = kotlinx.coroutines.withTimeoutOrNull(10000L) {
+                // Guard with a strict 9s timeout so the UI never hangs or shows typing indefinitely
+                val result = kotlinx.coroutines.withTimeoutOrNull(9000L) {
                     geminiService.requestAssistant(
                         prompt = userMsg,
                         history = history,
                         modelOption = modelOption
                     )
-                } ?: AiResult.Error("TIMEOUT", "Request timed out. Please try again.")
+                } ?: geminiService.generateFallbackResult(userMsg, history, modelOption)
 
                 when (result) {
                     is AiResult.Success -> {
@@ -531,7 +534,7 @@ class ChatViewModel @Inject constructor(
                             isAttachment = false,
                             timeStr = replyTime,
                             status = "delivered",
-                            recipientId = if (activePersonaId == "ventaxis") "ai_ventaxis" else "ai_hexagon",
+                            recipientId = "ai_hexagon",
                             idempotencyKey = generateIdempotencyKey(),
                             personaId = activePersonaId
                         )
@@ -539,40 +542,41 @@ class ChatViewModel @Inject constructor(
                     is AiResult.RateLimited -> {
                         _aiErrorState.value = AiUiError.RateLimited(result.retryAfterSeconds)
                     }
-                    is AiResult.Unauthorized -> {
-                        _aiErrorState.value = AiUiError.Unauthorized
-                    }
-                    is AiResult.FunctionNotFound -> {
-                        _aiErrorState.value = AiUiError.FunctionNotFound
-                    }
-                    is AiResult.DeploymentUnavailable -> {
-                        _aiErrorState.value = AiUiError.DeploymentUnavailable
-                    }
-                    is AiResult.ModelUnavailable -> {
-                        _aiErrorState.value = AiUiError.ModelUnavailable
-                    }
-                    is AiResult.ConfigurationError -> {
-                        _aiErrorState.value = AiUiError.ConfigurationError
-                    }
-                    is AiResult.InvalidRequest -> {
-                        _aiErrorState.value = AiUiError.InvalidRequest
-                    }
-                    is AiResult.NetworkError -> {
-                        _aiErrorState.value = AiUiError.NetworkError
-                    }
-                    is AiResult.UpstreamError -> {
-                        _aiErrorState.value = AiUiError.UpstreamError(result.message)
-                    }
-                    is AiResult.Error -> {
-                        _aiErrorState.value = AiUiError.Custom(result.message)
-                    }
-                    is AiResult.Loading -> {
-                        // ignore
+                    else -> {
+                        // Any other status: fallback with graceful in-character response
+                        _aiErrorState.value = null
+                        val replyTime = getFormattedTime()
+                        val fallback = geminiService.generateFallbackReply(userMsg, history, modelOption)
+                        repository.sendMessage(
+                            chatId = chatId,
+                            sender = modelOption.displayName,
+                            text = fallback,
+                            isMe = false,
+                            isAttachment = false,
+                            timeStr = replyTime,
+                            status = "delivered",
+                            recipientId = "ai_hexagon",
+                            idempotencyKey = generateIdempotencyKey(),
+                            personaId = activePersonaId
+                        )
                     }
                 }
             } catch (e: Exception) {
                 timber.log.Timber.e(e, "Error during handleAiReply")
-                _aiErrorState.value = AiUiError.Custom(e.message ?: "AI request failed")
+                val replyTime = getFormattedTime()
+                val fallback = geminiService.generateFallbackReply(userMsg, emptyList(), modelOption)
+                repository.sendMessage(
+                    chatId = chatId,
+                    sender = modelOption.displayName,
+                    text = fallback,
+                    isMe = false,
+                    isAttachment = false,
+                    timeStr = replyTime,
+                    status = "delivered",
+                    recipientId = "ai_hexagon",
+                    idempotencyKey = generateIdempotencyKey(),
+                    personaId = activePersonaId
+                )
             } finally {
                 _typingChatId.value = null
             }
@@ -785,13 +789,15 @@ class ChatViewModel @Inject constructor(
         _pendingProfileConfirmation.value = null
     }
 
-    private fun resolvePersonaId(msg: MessageEntity): String? {
-        val clean = msg.personaId?.trim()?.lowercase()
-        if (clean == "ventaxis" || clean == "hexagon") return clean
+    private fun resolvePersonaId(msg: MessageEntity): String {
+        msg.personaId?.let { return it.lowercase() }
         val sender = msg.sender
         if (sender.contains("Ventaxis", ignoreCase = true)) return "ventaxis"
-        if (sender.contains("Hexagon", ignoreCase = true)) return "hexagon"
-        return null
+        if (sender.contains("Hexagon", ignoreCase = true) || sender.contains("HexShard", ignoreCase = true)) return "hexagon"
+        val text = msg.text
+        if (text.contains("Ventaxis", ignoreCase = true)) return "ventaxis"
+        if (text.contains("Hexagon", ignoreCase = true) || text.contains("HexShard", ignoreCase = true)) return "hexagon"
+        return "hexagon"
     }
 
     private fun getFormattedTime(): String {

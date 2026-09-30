@@ -472,39 +472,56 @@ object SupabaseAuthService {
 
             // 1. Request server-side complete account deletion via Edge Function
             try {
+                val edgePayload = JSONObject().apply {
+                    put("user_id", accountId)
+                    put("account_id", accountId)
+                }
                 val deleteReq = Request.Builder()
                     .url("$baseUrl/functions/v1/delete-account")
                     .header("apikey", anonKey)
                     .header("Authorization", "Bearer $accessToken")
                     .header("Content-Type", "application/json")
-                    .post("{}".toRequestBody(JSON_MEDIA))
+                    .post(edgePayload.toString().toRequestBody(JSON_MEDIA))
                     .build()
                 val resp = httpClient.newCall(deleteReq).execute()
+                val edgeBody = resp.body?.string() ?: ""
                 if (resp.isSuccessful) {
                     serverDeleted = true
+                } else {
+                    Timber.w("Edge function delete-account returned HTTP ${resp.code}: $edgeBody, trying RPC fallback")
                 }
                 resp.close()
             } catch (e: Exception) {
                 Timber.w(e, "Edge function delete-account call failed, attempting RPC delete")
             }
 
-            // 2. RPC fallback delete_user_account
+            // 2. RPC fallback delete_user_account with schema resilience
             if (!serverDeleted) {
-                try {
-                    val rpcReq = Request.Builder()
-                        .url("$baseUrl/rest/v1/rpc/delete_user_account")
-                        .header("apikey", anonKey)
-                        .header("Authorization", "Bearer $accessToken")
-                        .header("Content-Type", "application/json")
-                        .post("{}".toRequestBody(JSON_MEDIA))
-                        .build()
-                    val rpcResp = httpClient.newCall(rpcReq).execute()
-                    if (rpcResp.isSuccessful) {
-                        serverDeleted = true
+                val rpcPayloads = listOf(
+                    JSONObject().apply { put("p_user_id", accountId) },
+                    JSONObject().apply { put("p_account_id", accountId) },
+                    JSONObject()
+                )
+                for (payload in rpcPayloads) {
+                    try {
+                        val rpcReq = Request.Builder()
+                            .url("$baseUrl/rest/v1/rpc/delete_user_account")
+                            .header("apikey", anonKey)
+                            .header("Authorization", "Bearer $accessToken")
+                            .header("Content-Type", "application/json")
+                            .post(payload.toString().toRequestBody(JSON_MEDIA))
+                            .build()
+                        val rpcResp = httpClient.newCall(rpcReq).execute()
+                        val rpcBody = rpcResp.body?.string() ?: ""
+                        if (rpcResp.isSuccessful) {
+                            serverDeleted = true
+                            rpcResp.close()
+                            break
+                        }
+                        rpcResp.close()
+                    } catch (e: Exception) {
+                        Timber.d("RPC delete_user_account with payload $payload: ${e.message}")
                     }
-                    rpcResp.close()
-                } catch (e: Exception) {
-                    Timber.d("RPC delete_user_account: ${e.message}")
                 }
             }
 

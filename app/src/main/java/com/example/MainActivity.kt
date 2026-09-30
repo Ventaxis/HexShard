@@ -64,9 +64,8 @@ class MainActivity : ComponentActivity() {
                         ) {
                             AppNavigator(viewModel = viewModel)
 
-                            val pendingProfile by viewModel.pendingProfileConfirmation.collectAsState()
-                            if (pendingProfile != null) {
-                                val p = pendingProfile!!
+                            val currentPendingProfile by viewModel.pendingProfileConfirmation.collectAsState()
+                            currentPendingProfile?.let { p ->
                                 AlertDialog(
                                     onDismissRequest = { viewModel.dismissPendingProfileConfirmation() },
                                     title = {

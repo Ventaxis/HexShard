@@ -108,16 +108,23 @@ fun CameraQrScannerDialog(
                                 }
                             }
 
-                            try {
-                                cameraProvider.unbindAll()
-                                cameraProvider.bindToLifecycle(
-                                    ctx as androidx.lifecycle.LifecycleOwner,
-                                    CameraSelector.DEFAULT_BACK_CAMERA,
-                                    preview,
-                                    imageAnalysis
-                                )
-                            } catch (e: Exception) {
-                                Timber.e(e, "Camera binding failed")
+                            val lifecycleOwner = (ctx as? androidx.lifecycle.LifecycleOwner)
+                                ?: (context as? androidx.lifecycle.LifecycleOwner)
+
+                            if (lifecycleOwner != null) {
+                                try {
+                                    cameraProvider.unbindAll()
+                                    cameraProvider.bindToLifecycle(
+                                        lifecycleOwner,
+                                        CameraSelector.DEFAULT_BACK_CAMERA,
+                                        preview,
+                                        imageAnalysis
+                                    )
+                                } catch (e: Exception) {
+                                    Timber.e(e, "Camera binding failed")
+                                }
+                            } else {
+                                Timber.w("Cannot bind camera: LifecycleOwner not found")
                             }
                         }, ContextCompat.getMainExecutor(ctx))
 
